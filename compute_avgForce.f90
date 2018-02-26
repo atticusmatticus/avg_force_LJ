@@ -1,8 +1,6 @@
-! USAGE: this_file.x -crd [COORDINATE FILE] -fit [FIT PARAMETER FILE] -cfg [CONFIGURATION FILE] -out [OUTPUT FILE]
+! USAGE: this_file.x -cfg [CONFIGURATION FILE] -frc [FORCE FILE]
 !
 !
-! CfgFile = [python config file]
-! OutFile = [python output file]
 !
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -76,7 +74,6 @@ subroutine parse_command_line(frcFile,cfgFile) !,outFile)
 
 	frcFileFlag = .false.
 	cfgFileFlag = .false.
-!	outFileFlag = .false.
 	i=1
 	do
 		call get_command_argument(i,arg)
@@ -92,16 +89,10 @@ subroutine parse_command_line(frcFile,cfgFile) !,outFile)
 			call get_command_argument(i,cfgFile)
 			cfgFileFlag=.true.
 			print*, "cfg File: ", cfgFile
-!		case ('-out')
-!			i = i+1
-!			call get_command_argument(i,outFile)
-!			outFileFlag=.true.
-!			print*, "out File: ", outFile
 		case default
 			print*, 'Unrecognized command-line option: ', arg
-			print*, 'Usage: map_3D_gr.x -frc [frc file]'
-			print*, 'Usage: map_3D_gr.x -cfg [cfg file]'
-!			print*, 'Usage: map_3D_gr.x -out [out file]'
+			print*, 'Usage: compute_avgForce.x -frc [frc file]'
+			print*, 'Usage: compute_avgForce.x -cfg [cfg file]'
 			stop
 
 		end select
@@ -118,11 +109,6 @@ subroutine parse_command_line(frcFile,cfgFile) !,outFile)
 		write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
 		stop
 	endif
-
-!	if (outFileFlag.eqv..false.) then
-!		write(*,*) "Must provide a config file using command line argument -out [out file name]"
-!		stop
-!	endif
 
 endsubroutine parse_command_line
 
