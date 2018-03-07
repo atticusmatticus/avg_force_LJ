@@ -286,29 +286,29 @@ subroutine compute_avg_force
 	enddo
 
 	! Calculate the average force integral for top half of cylinder
-	do d = 1, num_R_bins ! loop lj--lj distances
+	do r = 1, num_R_bins ! loop lj--lj distances
 		do i = 1, num_xy_bins ! loop solvent locations
 			do j = 1, num_xy_bins ! loop solvent locations
-				rSolv1 = sqrt( (x_axis(i)-R(d)/2.0)**2 + y_axis(j)**2 )
-				rSolv2 = sqrt( (x_axis(i)+R(d)/2.0)**2 + y_axis(j)**2 )
+				rSolv1 = sqrt( (x_axis(i)-R(r)/2.0)**2 + y_axis(j)**2 )
+				rSolv2 = sqrt( (x_axis(i)+R(r)/2.0)**2 + y_axis(j)**2 )
 				call g12(rSolv1, rSolv2, gx)
 				! if gx = 0 then don't waste time with the rest of the calculation
 				!write(*,*) 'rSolv1: ', rSolv1, ' rSolv2: ', rSolv2, ' gx: ', gx
 				if (gx .gt. 1d-6) then
 					call lin_interpolate(rSolv1, lin_out)
 
-					! NOTES : 	'gx' is SPA of g(r)
-					! 			'lin_out' is |fs(x,y)|
+					! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
+					! 			'lin_out' is |fs(x,y)|, force from solvent at (x,y)
 				   	!			Now we need cos(theta) and y and we should have the integral.
 
-					fAvg(d) = fAvg(d) + ( gx * (-1)*lin_out * y_axis(j) * ( (x_axis(i)-(R(d)/2.0)) / rSolv1 ) )
+					fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * y_axis(j) * ( (x_axis(i)-(R(r)/2.0)) / rSolv1 ) )
 				endif
 			enddo
 		enddo
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*r**2
-		! 		Number density of chloroform per Angstrom**2
-		fAvg(d) = fAvg(d)*2*pi*0.00750924*R_step_size**2
+		! 		Number density of chloroform per Angstrom**2 == 0.00750924
+		fAvg(r) = fAvg(r)*2*pi*0.00750924*R_step_size**2
 	enddo
 
 endsubroutine compute_avg_force
