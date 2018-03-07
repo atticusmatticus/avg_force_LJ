@@ -262,7 +262,7 @@ subroutine compute_avg_force
 	use frcData
 	use cfgData
 	implicit none
-	integer num_xy_bins, d, i, j
+	integer num_xy_bins, r, i, j
 	double precision :: gx, lin_out, rSolv1, rSolv2, pi
 
 	pi = 3.1415926535
@@ -275,8 +275,8 @@ subroutine compute_avg_force
 	allocate( R(num_R_bins), fAvg(num_R_bins), x_axis(num_xy_bins), y_axis(num_xy_bins) )
 	fAvg = 0
 
-	do d = 1, num_R_bins
-		R(d) = d * R_step_size + R_min
+	do r = 1, num_R_bins
+		R(r) = r * R_step_size + R_min
 	enddo
 	do i = 1, num_xy_bins
 		x_axis(i) = i * R_step_size - xy_range
