@@ -10,7 +10,7 @@
 ! data for the force table.
 module frcData
 	double precision, allocatable :: fDist(:), fDir(:)
-	double precision, allocatable :: R(:), fAvg(:), u_dir(:)
+	double precision, allocatable :: R_axis(:), fAvg(:), u_dir(:)
 	double precision, allocatable :: x_axis(:), y_axis(:)
 	double precision :: fDist_step_size
 	integer :: num_R_bins, numFrcLines
@@ -272,11 +272,11 @@ subroutine compute_avg_force
 	num_xy_bins = int( (xy_range + xy_range)/R_step_size )
 	write(*,*) "Number of XY Bins: ", num_xy_bins
 
-	allocate( R(num_R_bins), fAvg(num_R_bins), x_axis(num_xy_bins), y_axis(num_xy_bins) )
+	allocate( R_axis(num_R_bins), fAvg(num_R_bins), x_axis(num_xy_bins), y_axis(num_xy_bins) )
 	fAvg = 0
 
 	do r = 1, num_R_bins
-		R(r) = r * R_step_size + R_min
+		R_axis(r) = r * R_step_size + R_min
 	enddo
 	do i = 1, num_xy_bins
 		x_axis(i) = i * R_step_size - xy_range
@@ -289,8 +289,8 @@ subroutine compute_avg_force
 	do r = 1, num_R_bins ! loop lj--lj distances
 		do i = 1, num_xy_bins ! loop solvent locations
 			do j = 1, num_xy_bins ! loop solvent locations
-				rSolv1 = sqrt( (x_axis(i)-R(r)/2.0)**2 + y_axis(j)**2 )
-				rSolv2 = sqrt( (x_axis(i)+R(r)/2.0)**2 + y_axis(j)**2 )
+				rSolv1 = sqrt( (x_axis(i)-R_axis(r)/2.0)**2 + y_axis(j)**2 )
+				rSolv2 = sqrt( (x_axis(i)+R_axis(r)/2.0)**2 + y_axis(j)**2 )
 				call g12(rSolv1, rSolv2, gx)
 				! if gx = 0 then don't waste time with the rest of the calculation
 				!write(*,*) 'rSolv1: ', rSolv1, ' rSolv2: ', rSolv2, ' gx: ', gx
@@ -301,7 +301,7 @@ subroutine compute_avg_force
 					! 			'lin_out' is |fs(x,y)|, force from solvent at (x,y)
 				   	!			Now we need cos(theta) and y and we should have the integral.
 
-					fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * y_axis(j) * ( (x_axis(i)-(R(r)/2.0)) / rSolv1 ) )
+					fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * y_axis(j) * ( (x_axis(i)-(R_axis(r)/2.0)) / rSolv1 ) )
 				endif
 			enddo
 		enddo
@@ -403,7 +403,7 @@ subroutine write_output(outFile)
 	write(25,*) "# 2.	Avg Force"
 	write(25,*) "# 3.	PMF"
 	do i = 1, num_R_bins
-		write(25,899) R(i), fAvg(i), u_dir(i)
+		write(25,899) R_axis(i), fAvg(i), u_dir(i)
 	enddo
 	close(25)
 
