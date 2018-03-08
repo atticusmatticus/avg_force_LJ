@@ -298,7 +298,7 @@ subroutine compute_avg_force
 					call lin_interpolate(rSolv1, lin_out)
 
 					! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
-					! 			'lin_out' is |fs(x,y)|, force from solvent at (x,y)
+					! 			'lin_out' is ||fs(x,y)||, force from solvent at (x,y)
 				   	!			Now we need cos(theta) and y and we should have the integral.
 
 					fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * y_axis(j) * ( (x_axis(i)-(R_axis(r)/2.0)) / rSolv1 ) )
