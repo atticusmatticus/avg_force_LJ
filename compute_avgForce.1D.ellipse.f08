@@ -304,9 +304,8 @@ subroutine compute_avg_force
 				! note: loop through orientations of solvent at x(i) and z(j)
 				do th1 = 0, 50 ! if the limit is exclusive. 49 if inclusive.
 					do ph1 = 0, 100 ! same as th1
-						! rotate unit vector p = (0, 0, 1) about x-axis by th1. xxx does this need to be 3D?
 
-						! rotate p about z-axis by ph1.
+						call alpha(rSolv1, rSolv2, ph1, th1, alp1, alp2)
 
 						! translate by x(i) and z(j).
 
@@ -372,20 +371,30 @@ endfunction parabola
 
 
 ! Calculate orientation vector 'p' via Rz(phi).Rx(theta).z
-function rotate_p(ph1, th1) result(p)
+subroutine alpha(dist1, dist2, ph1, th1, alp1, alp2)
 	use cfgData
 	implicit none
 	integer, intent(in)				:: ph1, th1			! inputs not to be changed
+	double precision, intent(in)	:: dist1, dist2
 	double precision				:: phi, theta
-	double precision				:: p(3)				! ouput
+	double precision				:: p(3)				
+	double precision				:: alp1, alp2		! outputs
 
+	! fixme: could i do this with cos(theta) instead? cos(phi)?
 	phi = ph1*angle_step_size
 	theta = th1*angle_step_size
 
 	! fixme: is this the right way to input an array?
 	p = ( sin(phi)*sin(theta), -cos(phi)*sin(theta), cos(theta) )
+	! fixme: or this...
+	p(1) = sin(phi)*sin(theta)
+	p(2) = -cos(phi)*sin(theta)
+	p(3) = cos(theta)
 
-endfunction
+	! calculate cos(theta1) and cos(theta2)
+	cosTh1 = dist1
+
+endsubroutine
 
 
 ! linearly interpolate between force at 'a' and 'b' to give 'output' force.
