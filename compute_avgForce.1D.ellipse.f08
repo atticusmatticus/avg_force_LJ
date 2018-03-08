@@ -10,7 +10,7 @@
 ! data for the force table.
 module frcData
 	double precision, allocatable :: fDist(:), fDir(:)
-	double precision, allocatable :: R(:), fAvg(:), u_dir(:)
+	double precision, allocatable :: R_axis(:), fAvg(:), u_dir(:)
 	double precision, allocatable :: x_axis(:), z_axis(:)
 	double precision :: fDist_step_size
 	integer :: num_R_bins, numFrcLines
@@ -19,9 +19,16 @@ endmodule frcData
 
 ! data from the config file.
 module cfgData
-	double precision :: x1, x2, x0, R_step_size, R_min, R_max, xz_range, angle_step_size
+	double precision :: x1, x2, x0, R_step_size, R_min, R_max, xz_range, phi_step_size, cosTheta_step_size, y0, offset
 
 endmodule cfgData
+
+! data for calculating alpha value.
+module alphaData
+	double precision :: rSolv1(3), rSolv2(3)
+	double precision :: rSolv1n, rSolv2n, y02, alp1, alp2
+
+endmodule alphaData
 
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -121,7 +128,8 @@ subroutine read_cfg(cfgFile,outFile)
 	character*128 line
 	character*32 firstWord, sep
 	integer ios
-	logical x1Flag, x2Flag, x0Flag, RstepSizeFlag, outFileFlag, RmaxFlag, RminFlag, xzRangeFlag, angleStepSizeFlag
+	logical x1Flag, x2Flag, x0Flag, RstepSizeFlag, outFileFlag, RmaxFlag, RminFlag, xzRangeFlag, phiStepSizeFlag
+	logical cosThetaStepFlag, y0Flag, offsetFlag
 
 	x1Flag = .false.
 	x2Flag = .false.
@@ -131,7 +139,10 @@ subroutine read_cfg(cfgFile,outFile)
 	RmaxFlag = .false.
 	RminFlag = .false.
 	xzRangeFlag = .false.
-	angleStepSizeFlag = .false.
+	phiStepSizeFlag = .false.
+	cosThetaStepFlag = .false.
+	y0Flag = .false.
+	offsetFlag = .false.
 
 	ios = 0
 
@@ -172,10 +183,22 @@ subroutine read_cfg(cfgFile,outFile)
 				read(line,*) xz_range
 				write(*,*) "XZ - Range:	", xz_range
 				xzRangeFlag = .true.
-			else if (firstWord .eq. "angle_step_size") then
-				read(line,*) angle_step_size
-				write(*,*) "Angle Step Size:	", angle_step_size
-				angleStepSizeFlag= .true.
+			else if (firstWord .eq. "phi_step_size") then
+				read(line,*) phi_step_size
+				write(*,*) "Phi Step Size:	", phi_step_size
+				phiStepSizeFlag= .true.
+			else if (firstWord .eq. "cosTheta_step_size") then
+				read(line,*) y0
+				write(*,*) "Cosine Theta Step Size:	", cosTheta_step_size
+				cosThetaStepFlag = .true.
+			else if (firstWord .eq. "offset") then
+				read(line,*) offset
+				write(*,*) "Offset Along Minor Axis:	", offset
+				offsetFlag = .true.
+			else if (firstWord .eq. "y0") then
+				read(line,*) y0
+				write(*,*) "Spheroid Minor Axis:	", y0
+				y0Flag = .true.
 			endif
 		endif
 	enddo
@@ -213,8 +236,20 @@ subroutine read_cfg(cfgFile,outFile)
 		write(*,*) "Config file must have a 'xz_range' value"
 		stop
 	endif
-	if (angleStepSizeFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'angle_step_size' value"
+	if (phiStepSizeFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'phi_step_size' value"
+		stop
+	endif
+	if (cosThetaStepFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'cosTheta_step_size' value"
+		stop
+	endif
+	if (offsetFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'offset' value"
+		stop
+	endif
+	if (y0Flag.eqv..false.) then
+		write(*,*) "Config file must have a 'y0' value"
 		stop
 	endif
 
@@ -270,22 +305,24 @@ endsubroutine make_force_table
 subroutine compute_avg_force
 	use frcData
 	use cfgData
+	use alphaData
 	implicit none
-	integer num_xz_bins, r, i, j
-	double precision :: gx, lin_out, rSolv1, rSolv2, pi
+	integer num_xz_bins, r, i, j, thLF, phLF
+	double precision :: gx, lin_out, pi
 
 	pi = 3.1415926535
+	y02 = y0*y0
 
 	num_R_bins = int( (R_max - R_min)/R_step_size )
 	write(*,*) "Number of R Bins: ", num_R_bins
 	num_xz_bins = int( (xz_range + xz_range)/R_step_size )
 	write(*,*) "Number of XZ Bins: ", num_xz_bins
 
-	allocate( R(num_R_bins), fAvg(num_R_bins), x_axis(num_xz_bins), z_axis(num_xz_bins) )
+	allocate( R_axis(num_R_bins), fAvg(num_R_bins), x_axis(num_xz_bins), z_axis(num_xz_bins) )
 	fAvg = 0
 
 	do r = 1, num_R_bins
-		R(r) = r * R_step_size + R_min
+		R_axis(r) = r * R_step_size + R_min
 	enddo
 	do i = 1, num_xz_bins
 		x_axis(i) = i * R_step_size - xz_range
@@ -298,33 +335,41 @@ subroutine compute_avg_force
 	do r = 1, num_R_bins ! loop lj--lj distances
 		do i = 1, num_xz_bins ! loop solvent locations
 			do j = 1, num_xz_bins ! loop solvent locations
-				rSolv1 = sqrt( (x_axis(i)-R(r)/2.0)**2 + z_axis(j)**2 )
-				rSolv2 = sqrt( (x_axis(i)+R(r)/2.0)**2 + z_axis(j)**2 )
+				rSolv1(1) = x_axis(i)-R_axis(r)/2.0
+				rSolv1(2) = 0.0
+				rSolv1(3) = z_axis(j)
+				rSolv1n = sqrt( rSolv1(1)**2 + rSolv1(2)**2 + rSolv1(3)**2 )
+				!rSolv1n = norm2(rSolv1)
+
+				rSolv2(1) = x_axis(i)+R_axis(r)/2.0
+				rSolv2(2) = 0.0
+				rSolv2(3) = z_axis(j)
+				rSolv2n = sqrt( rSolv2(1)**2 + rSolv2(2)**2 + rSolv2(3)**2 )
+				!rSolv2n = norm2(rSolv2)
 
 				! note: loop through orientations of solvent at x(i) and z(j)
-				do th1 = 0, 50 ! if the limit is exclusive. 49 if inclusive.
-					do ph1 = 0, 100 ! same as th1
+				do thLF = 0, 49 ! if the limit is exclusive. 49 if inclusive.
+					do phLF = 0, 100 ! same as th1
 
-						call alpha(rSolv1, rSolv2, ph1, th1, alp1, alp2)
+						call alpha(phLF, thLF)
 
-						! translate by x(i) and z(j).
+						call g12(alp1, alp2, gx)
+						! if gx = 0 then don't waste time with the rest of the calculation
+						!write(*,*) 'alpha1: ', alp1, ' alpha2: ', alp2, ' gx: ', gx
+						if (gx .gt. 1d-6) then
+							call lin_interpolate(alp1, lin_out)
+
+							! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
+							! 			'lin_out' is |fs(x,z)|, force from solvent at (x,z)
+							!			Now we need cos(theta) and z and we should have the integral.
+
+							! FIXME:	what happens to this integral when we change to alpha1 and alpha2 ???
+							fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( (x_axis(i)-(R_axis(r)/2.0)) / rSolv1n ) )
+						endif
+					enddo
+				enddo
 
 
-
-
-
-				call g12(rSolv1, rSolv2, gx)
-				! if gx = 0 then don't waste time with the rest of the calculation
-				!write(*,*) 'rSolv1: ', rSolv1, ' rSolv2: ', rSolv2, ' gx: ', gx
-				if (gx .gt. 1d-6) then
-					call lin_interpolate(rSolv1, lin_out)
-
-					! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
-					! 			'lin_out' is |fs(x,z)|, force from solvent at (x,z)
-				   	!			Now we need cos(theta) and z and we should have the integral.
-
-					fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( (x_axis(i)-(R(r)/2.0)) / rSolv1 ) )
-				endif
 			enddo
 		enddo
 
@@ -337,21 +382,21 @@ endsubroutine compute_avg_force
 
 
 ! compute the superposition g1(r1)*g2(r2) depending on what range the solvent is in.
-subroutine g12(dist1, dist2, gx)
+subroutine g12(rSolv1n, rSolv2n, gx)
 	use cfgData
 	implicit none
-	double precision :: dist1, dist2, parabola
+	double precision :: rSolv1n, rSolv2n, parabola
 	double precision :: gx
 
-	if ( (dist1 .le. x1) .or. (dist2 .le. x1) ) then
+	if ( (rSolv1n .le. x1) .or. (rSolv2n .le. x1) ) then
 		gx = 0
-	elseif ( (dist1 .gt. x1) .and. (dist1 .lt. x2) .and. (dist2 .ge. x2) ) then
-		gx = parabola(dist1)
-	elseif ( (dist1 .gt. x1) .and. (dist1 .lt. x2) .and. (dist2 .gt. x1) .and. (dist2 .lt. x2) ) then
-		gx = parabola(dist1) * parabola(dist2)
-	elseif ( (dist1 .ge. x2) .and. (dist2 .gt. x1) .and. (dist2 .lt. x2) ) then
-		gx = parabola(dist2)
-	elseif ( (dist1 .ge. x2) .and. (dist2 .ge. x2) ) then
+	elseif ( (rSolv1n .gt. x1) .and. (rSolv1n .lt. x2) .and. (rSolv2n .ge. x2) ) then
+		gx = parabola(rSolv1n)
+	elseif ( (rSolv1n .gt. x1) .and. (rSolv1n .lt. x2) .and. (rSolv2n .gt. x1) .and. (rSolv2n .lt. x2) ) then
+		gx = parabola(rSolv1n) * parabola(rSolv2n)
+	elseif ( (rSolv1n .ge. x2) .and. (rSolv2n .gt. x1) .and. (rSolv2n .lt. x2) ) then
+		gx = parabola(rSolv2n)
+	elseif ( (rSolv1n .ge. x2) .and. (rSolv2n .ge. x2) ) then
 		gx = 1
 	endif
 	
@@ -370,31 +415,33 @@ function parabola(x) result(p)
 endfunction parabola
 
 
-! Calculate orientation vector 'p' via Rz(phi).Rx(theta).z
-subroutine alpha(dist1, dist2, ph1, th1, alp1, alp2)
+! rotate solvent vector 'p' and calculate alpha for lj particles 1 and 2.
+subroutine alpha(phLF, thLF)
 	use cfgData
+	use alphaData
 	implicit none
-	integer, intent(in)				:: ph1, th1			! inputs not to be changed
-	double precision, intent(in)	:: dist1, dist2
-	double precision				:: phi, theta
-	double precision				:: p(3)				
-	double precision				:: alp1, alp2		! outputs
+	integer				:: phLF, thLF
+	double precision	:: phiLF, cosThetaLF
+	double precision	:: p(3)
+	double precision	:: cosTh1, cosTh2
 
-	! fixme: could i do this with cos(theta) instead? cos(phi)?
-	phi = ph1*angle_step_size
-	theta = th1*angle_step_size
+	! Lab Frame angles
+	phiLF = phLF*phi_step_size
+	cosThetaLF = thLF*cosTheta_step_size
 
-	! fixme: is this the right way to input an array?
-	p = ( sin(phi)*sin(theta), -cos(phi)*sin(theta), cos(theta) )
-	! fixme: or this...
-	p(1) = sin(phi)*sin(theta)
-	p(2) = -cos(phi)*sin(theta)
-	p(3) = cos(theta)
+	! make rotated solvent vector at origin
+	p(1) = sin(phiLF)*sqrt((1.0-cosThetaLF**2))
+	p(2) = cos(phiLF)*sqrt((1.0-cosThetaLF**2))
+	p(3) = cosThetaLF
 
-	! calculate cos(theta1) and cos(theta2)
-	cosTh1 = dist1
+	! calculate cos(theta1) and cos(theta2) relative to lj-spheres 1 and 2.
+	cosTh1 = dot_product(rSolv1, p) / rSolv1n
+	cosTh2 = dot_product(rSolv2, p) / rSolv2n
 
-endsubroutine
+	alp1 = sqrt( rSolv1n**2 * (1.0-cosTh1**2) + (rSolv1n*cosTh1 - offset)**2 / y02 )
+	alp2 = sqrt( rSolv2n**2 * (1.0-cosTh2**2) + (rSolv2n*cosTh2 - offset)**2 / y02 )
+
+endsubroutine alpha
 
 
 ! linearly interpolate between force at 'a' and 'b' to give 'output' force.
@@ -452,7 +499,7 @@ subroutine write_output(outFile)
 	write(25,*) "# 2.	Avg Force"
 	write(25,*) "# 3.	PMF"
 	do i = 1, num_R_bins
-		write(25,899) R(i), fAvg(i), u_dir(i)
+		write(25,899) R_axis(i), fAvg(i), u_dir(i)
 	enddo
 	close(25)
 
