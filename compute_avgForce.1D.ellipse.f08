@@ -360,16 +360,14 @@ subroutine compute_avg_force
 							call lin_interpolate(alp1, lin_out)
 
 							! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
-							! 			'lin_out' is |fs(x,z)|, force from solvent at (x,z)
+							! 			'lin_out' is ||fs(x,z)||, force from solvent at (x,z)
 							!			Now we need cos(theta) and z and we should have the integral.
 
-							! FIXME:	what happens to this integral when we change to alpha1 and alpha2 ???
+							! FIXME:	do we keep the rSolv1n or instead use alp1
 							fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( (x_axis(i)-(R_axis(r)/2.0)) / rSolv1n ) )
 						endif
 					enddo
 				enddo
-
-
 			enddo
 		enddo
 
