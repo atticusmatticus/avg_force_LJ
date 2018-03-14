@@ -1,0 +1,28 @@
+set encoding utf8
+set term postscript eps enhanced color font 'Helvetica,6'
+
+reset
+set output 'LJ_sphere.gr.XX.eps'
+set grid front
+set xtics 1
+set ytics 1
+set yrange[0:10]
+set size ratio -1
+set xlabel 'X Distance [{\305}]'
+set ylabel 'Z Distance [{\305}]'
+set palette defined (0 '#000000', 0.0000000001 '#ff0000', 1 '#ffffff', 2 '#0000ff', 4 '#00ffff')
+set cbr[0:4]
+plot	'lists_output.XX.dat' u 1:2:4 lc palette pt 5 ps 0.4 not
+
+reset
+set output 'LJ_sphere.frc.XX.eps'
+set grid front
+set xtics 1
+set ytics 1
+set yrange[0:10]
+set size ratio -1
+set xlabel 'X Distance [{\305}]'
+set ylabel 'Z Distance [{\305}]'
+set palette defined (0 '#000000', 0.0000000001 '#ff0000', 1 '#ffffff', 2 '#0000ff', 4 '#00ffff')
+set cbr[0:4]
+plot	'lists_output.XX.dat' u 1:2:3 lc palette pt 5 ps 0.4 not
