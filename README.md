@@ -2,9 +2,8 @@
 
 ## 'Spherical' scripts assume a spherical solvent particle
 
-1D force list needed
+1D force list of average force as a function of distance, r.
 
 ## 'Elliptical' scripts assume an elliptical solvent particle
 
-2D force list needed (r, cos(theta))
-
+1D force list of average force as a function of alpha(r,cos(theta)).
