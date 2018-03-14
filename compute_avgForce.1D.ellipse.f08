@@ -369,11 +369,13 @@ subroutine compute_avg_force
 		cosThetaLF(ithLF) = (ithLF-0.5)*cosTheta_step_size - 1.d0
 		sinThetaLF(ithLF) = dsqrt(abs(1.0-cosThetaLF(ithLF)**2))
 	enddo
+	write(*,*) "Number of Cos(Theta) Bins: ", theta_bins
 	do iphiLF = 1, phi_bins
 		phiLF = (iphiLF+0.5)*phi_step_size
 		sinPhiLF(iphiLF) = dsin(phiLF)
 		cosPhiLF(iphiLF) = dcos(phiLF)
 	enddo
+	write(*,*) "Number of Phi Bins: ", phi_bins
 
 	! Calculate the average force integral for top half of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
@@ -548,7 +550,7 @@ subroutine write_output(outFile)
 	enddo
 	close(35)
 
-899		format (3(1x,f20.10))
+899		format (3(1x,f16.12))
 !899		format (3(1x,e20.10)) ! scientific format
 
 endsubroutine write_output
@@ -565,7 +567,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins, theta_bins, phi_bins)
 
 	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
 	write(temp,frmt) r ! converting integer to string using 'internal file'
-	filename='lists_output.'//trim(temp)//'.dat'
+	filename='ellipse_output.'//trim(temp)//'.dat'
 
 
 	open(35,file=filename)
@@ -581,6 +583,6 @@ subroutine write_test_out(r, num_x_bins, num_z_bins, theta_bins, phi_bins)
 	enddo
 	close(35)
 
-898		format (4(1x,f20.10))
+898		format (4(1x,f16.12))
 
 endsubroutine write_test_out
