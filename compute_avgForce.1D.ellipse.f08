@@ -19,8 +19,9 @@ endmodule frcData
 
 ! data from the config file.
 module cfgData
-	double precision :: x1, x2, x0, R_step_size, xz_step_size, R_min, R_max, xz_range, phi_step_size, cosTheta_step_size, y0
-	double precision :: offset
+	double precision	:: x1, x2, x0, R_step_size, xz_step_size, R_min, R_max, xz_range, y0
+	double precision	:: offset, phi_step_size, cosTheta_step_size
+	integer				:: theta_bins, phi_bins
 
 endmodule cfgData
 
@@ -137,7 +138,7 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
 	logical 			:: x1Flag, x2Flag, x0Flag, RstepSizeFlag, xzStepSizeFlag, outFileFlag, RmaxFlag, RminFlag
-	logical 			:: xzRangeFlag, phiStepSizeFlag, cosThetaStepFlag, y0Flag, offsetFlag
+	logical 			:: xzRangeFlag, phiBinsFlag, thetaBinsFlag, y0Flag, offsetFlag
 
 	x1Flag = .false.
 	x2Flag = .false.
@@ -148,8 +149,8 @@ subroutine read_cfg(cfgFile, outFile)
 	RmaxFlag = .false.
 	RminFlag = .false.
 	xzRangeFlag = .false.
-	phiStepSizeFlag = .false.
-	cosThetaStepFlag = .false.
+	phiBinsFlag = .false.
+	thetaBinsFlag = .false.
 	y0Flag = .false.
 	offsetFlag = .false.
 
@@ -196,14 +197,14 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) xz_range
 				write(*,*) "XZ - Range:	", xz_range
 				xzRangeFlag = .true.
-			else if (firstWord .eq. "phi_step_size") then
-				read(line,*) phi_step_size
-				write(*,*) "Phi Step Size:	", phi_step_size
-				phiStepSizeFlag= .true.
-			else if (firstWord .eq. "cosTheta_step_size") then
-				read(line,*) cosTheta_step_size
-				write(*,*) "Cosine Theta Step Size:	", cosTheta_step_size
-				cosThetaStepFlag = .true.
+			else if (firstWord .eq. "phi_bins") then
+				read(line,*) phi_bins
+				write(*,*) "Phi Bins:	", phi_bins
+				phiBinsFlag= .true.
+			else if (firstWord .eq. "theta_bins") then
+				read(line,*) theta_bins
+				write(*,*) "Cosine Theta Bins:	", theta_bins
+				thetaBinsFlag = .true.
 			else if (firstWord .eq. "offset") then
 				read(line,*) offset
 				write(*,*) "Offset Along Minor Axis:	", offset
@@ -253,12 +254,12 @@ subroutine read_cfg(cfgFile, outFile)
 		write(*,*) "Config file must have a 'xz_range' value"
 		stop
 	endif
-	if (phiStepSizeFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'phi_step_size' value"
+	if (phiBinsFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'phi_bins' value"
 		stop
 	endif
-	if (cosThetaStepFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'cosTheta_step_size' value"
+	if (thetaBinsFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'theta_bins' value"
 		stop
 	endif
 	if (offsetFlag.eqv..false.) then
@@ -307,7 +308,7 @@ subroutine make_force_table(frcFile)
 		read(20,'(a)',IOSTAT=ios) line
 		if (line(1:1) .ne. "#") then
 			read(line,*) fDist(i), junk, junk, fDir(i)
-!			write(6,*) fDist(i), fDir(i)
+			!write(6,*) fDist(i), fDir(i)
 			i = i + 1
 		endif
 	enddo
@@ -325,8 +326,8 @@ subroutine compute_avg_force
 	use alphaData
 	use testData
 	implicit none
-	integer 			:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF, theta_bins, phi_bins
-	double precision	:: gx, lin_out, pi, phiLF
+	integer 			:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
+	double precision	:: gx, lin_out, pi, phiLF, cosTh_max, cosTh_min, phi_max, phi_min
 
 	pi = 3.1415926535
 	y02 = y0*y0
@@ -335,61 +336,67 @@ subroutine compute_avg_force
 
 	num_R_bins = int( (R_max - R_min)/R_step_size )
 	write(*,*) "Number of R Bins: ", num_R_bins
-	num_x_bins = int( (xz_range + xz_range)/xz_step_size )
+	num_x_bins = int( (dble(2) * xz_range)/xz_step_size )
 	write(*,*) "Number of X Bins: ", num_x_bins
 	num_z_bins = int( (xz_range)/xz_step_size )
 	write(*,*) "Number of Z Bins: ", num_z_bins
 
 	! allocate array sizes for axes and average force
 	allocate( R_axis(num_R_bins), fAvg(num_R_bins), x_axis(num_x_bins), z_axis(num_z_bins) )
-	R_axis = 0.d0
-	fAvg = 0.d0
-	x_axis = 0.d0
-	z_axis = 0.d0
+	R_axis = dble(0)
+	fAvg = dble(0)
+	x_axis = dble(0)
+	z_axis = dble(0)
 
 	! allocate arrays for testing arrays
 	allocate( linAvg(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
-	linAvg = 0.d0
-	grSPA = 0.d0
+	linAvg = dble(0)
+	grSPA = dble(0)
 
 	! Distance Axes
 	do r = 1, num_R_bins
 		R_axis(r) = (r-1) * R_step_size + R_min
 	enddo
 	do i = 1, num_x_bins
-		x_axis(i) = (i-1) * xz_step_size - xz_range ! fixme xz_step_size
+		x_axis(i) = (i-1) * xz_step_size - xz_range
 	enddo
 	do j = 1, num_z_bins
-		z_axis(j) = (j-1) * xz_step_size ! fixme xz_step_size
+		z_axis(j) = (j-1) * xz_step_size
 	enddo
 
 	! Angles
 	allocate( cosThetaLF(theta_bins), sinThetaLF(theta_bins), sinPhiLF(phi_bins), cosPhiLF(phi_bins) )
+	cosTh_max = dble(1)
+	cosTh_min = dble(-1)
+	cosTheta_step_size = (cosTh_max - cosTh_min) / dble(theta_bins)
 	do ithLF = 1, theta_bins
-		cosThetaLF(ithLF) = (ithLF-0.5)*cosTheta_step_size - 1.d0
-		sinThetaLF(ithLF) = dsqrt(abs(1.0-cosThetaLF(ithLF)**2))
+		cosThetaLF(ithLF) = (ithLF-dble(0.5))*cosTheta_step_size - dble(1)
+		sinThetaLF(ithLF) = dsqrt(abs(dble(1)-cosThetaLF(ithLF)**2))
 	enddo
-	write(*,*) "Number of Cos(Theta) Bins: ", theta_bins
+	write(*,*) "Cos(Theta) Step Size: ", cosTheta_step_size
+	phi_max = dble(2*pi)
+	phi_min = dble(0)
+	phi_step_size = (phi_max - phi_min) / dble(phi_bins)
 	do iphiLF = 1, phi_bins
-		phiLF = (iphiLF+0.5)*phi_step_size
+		phiLF = (iphiLF+dble(0.5))*phi_step_size
 		sinPhiLF(iphiLF) = dsin(phiLF)
 		cosPhiLF(iphiLF) = dcos(phiLF)
 	enddo
-	write(*,*) "Number of Phi Bins: ", phi_bins
+	write(*,*) "Phi Step Size: ", phi_step_size
 
 	! Calculate the average force integral for top half of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
-		linAvg = 0.d0
-		grSPA = 0.d0
+		linAvg = dble(0)
+		grSPA = dble(0)
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
 				rSolv1(1) = x_axis(i)-R_axis(r)/2.0
-				rSolv1(2) = 0.0
+				rSolv1(2) = dble(0)
 				rSolv1(3) = z_axis(j)
 				rSolv1n = norm2(rSolv1)
 
 				rSolv2(1) = x_axis(i)+R_axis(r)/2.0
-				rSolv2(2) = 0.0
+				rSolv2(2) = dble(0)
 				rSolv2(3) = z_axis(j)
 				rSolv2n = norm2(rSolv2)
 
@@ -398,7 +405,7 @@ subroutine compute_avg_force
 					do iphiLF = 1, phi_bins
 
 						if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
-							gx = 0.d0 ! avoid NaNs in alpha
+							gx = dble(0) ! avoid NaNs in alpha
 						else
 							call alpha(iphiLF, ithLF)
 
@@ -415,18 +422,18 @@ subroutine compute_avg_force
 							!			Now we need cos(theta) and z and we should have the integral.
 
 							fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							linAvg(i,j) = linAvg(i,j) + lin_out ! fixme print one of these to file for every r
-							grSPA(i,j) = grSPA(i,j) + gx ! fixme same with gx
+							linAvg(i,j) = linAvg(i,j) + lin_out
+							grSPA(i,j) = grSPA(i,j) + gx
 						endif
 					enddo !phi
 				enddo !theta
 			enddo !z
 		enddo !x
-		call write_test_out(r, num_x_bins, num_z_bins, theta_bins, phi_bins) ! write grSPA and lin_out arrays
+		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and lin_out arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*r**2
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)*2*pi*0.00750924*xz_step_size**2*phi_step_size*cosTheta_step_size ! fixme xz_step_size
+		fAvg(r) = fAvg(r)*dble(2)*pi*dble(0.00750924)*xz_step_size*xz_step_size*phi_step_size*cosTheta_step_size ! fixme factor of 10 too large
 	enddo !r
 
 endsubroutine compute_avg_force
@@ -441,7 +448,7 @@ subroutine g12(gx)
 	double precision :: gx
 
 	if ( (alp1 .le. x1) .or. (alp2 .le. x1) ) then
-		gx = 0
+		gx = dble(0)
 	elseif ( (alp1 .gt. x1) .and. (alp1 .lt. x2) .and. (alp2 .ge. x2) ) then
 		gx = parabola(alp1)
 	elseif ( (alp1 .gt. x1) .and. (alp1 .lt. x2) .and. (alp2 .gt. x1) .and. (alp2 .lt. x2) ) then
@@ -449,7 +456,7 @@ subroutine g12(gx)
 	elseif ( (alp1 .ge. x2) .and. (alp2 .gt. x1) .and. (alp2 .lt. x2) ) then
 		gx = parabola(alp2)
 	elseif ( (alp1 .ge. x2) .and. (alp2 .ge. x2) ) then
-		gx = 1
+		gx = dble(1)
 	endif
 	
 endsubroutine g12
@@ -473,8 +480,7 @@ subroutine alpha(iphiLF, ithLF)
 	use alphaData
 	implicit none
 	integer				:: iphiLF, ithLF
-	double precision	:: p(3)
-	double precision	:: cosTh1, cosTh2
+	double precision	:: p(3), cosTh1, cosTh2
 
 	! make rotated solvent vector at origin
 	p(1) = sinPhiLF(iphiLF)*sinThetaLF(ithLF)
@@ -485,8 +491,8 @@ subroutine alpha(iphiLF, ithLF)
 	cosTh1 = dot_product(rSolv1, p) / rSolv1n
 	cosTh2 = dot_product(rSolv2, p) / rSolv2n
 
-	alp1 = dsqrt( rSolv1n**2 * (1.0-cosTh1**2) + (rSolv1n*cosTh1 - offset)**2 / y02 )
-	alp2 = dsqrt( rSolv2n**2 * (1.0-cosTh2**2) + (rSolv2n*cosTh2 - offset)**2 / y02 )
+	alp1 = dsqrt( rSolv1n**2 * (dble(1)-cosTh1**2) + (rSolv1n*cosTh1 - offset)**2 / y02 )
+	alp2 = dsqrt( rSolv2n**2 * (dble(1)-cosTh2**2) + (rSolv2n*cosTh2 - offset)**2 / y02 )
 
 endsubroutine alpha
 
@@ -498,12 +504,12 @@ subroutine lin_interpolate(alp, lin_out)
 	integer 			:: i1, i2	! the left and right flanking indices
 	double precision 	:: float_index, alp, lin_out
 
-	float_index = alp / fDist_step_size + 0.5 ! fixme forces come from half bin position. print lin_out(alp) compare to MD sim.
+	float_index = alp / fDist_step_size + 0.5 ! forces come from half bin position. print lin_out(alp) compare to MD sim.
 	i1 = floor(float_index)
 	i2 = i1 + 1
 
 	if (i2 .ge. numFrcLines) then
-		lin_out = 0
+		lin_out = dble(0)
 	else
 		lin_out = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
 	endif
@@ -520,7 +526,7 @@ subroutine integrate_force
 	integer 		:: d
 
 	allocate( u_dir(num_R_bins) )
-	u_dir = 0.d0
+	u_dir = dble(0)
 
 	do d = 1, num_R_bins
 		if (d .eq. 1) then
@@ -537,8 +543,8 @@ endsubroutine integrate_force
 subroutine write_output(outFile)
 	use frcData
 	implicit none
-	character(len=64) 		:: outFile
-	integer 				:: r
+	character(len=64) 	:: outFile
+	integer 			:: r
 
 	open(35,file=outFile)
 	write(6,*) "Writing output file:	", outFile
@@ -557,11 +563,13 @@ endsubroutine write_output
 
 
 ! write force out and g(r) out to compare against explicit
-subroutine write_test_out(r, num_x_bins, num_z_bins, theta_bins, phi_bins)
+subroutine write_test_out(r, num_x_bins, num_z_bins)
 	use frcData
+	use cfgData
 	use testData
 	implicit none
-	integer				:: r, i, j, num_x_bins, num_z_bins, theta_bins, phi_bins
+	integer				:: r, i, j, num_x_bins, num_z_bins
+	double precision	:: norm_const
 	character(len=32)	:: temp, filename
 	character(len=8)	:: frmt
 
@@ -569,6 +577,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins, theta_bins, phi_bins)
 	write(temp,frmt) r ! converting integer to string using 'internal file'
 	filename='ellipse_output.'//trim(temp)//'.dat'
 
+	norm_const = dble(1) / dble(theta_bins) / dble(phi_bins)
 
 	open(35,file=filename)
 	write(6,*) "Writing test file:	", filename
@@ -578,7 +587,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins, theta_bins, phi_bins)
 	write(35,*) "# 4.	g(r) List"
 	do i = 1, num_x_bins
 		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), linAvg(i,j)/theta_bins/phi_bins, grSPA(i,j)/theta_bins/phi_bins
+			write(35,898) x_axis(i), z_axis(j), linAvg(i,j)*norm_const, grSPA(i,j)*norm_const
 		enddo
 	enddo
 	close(35)
