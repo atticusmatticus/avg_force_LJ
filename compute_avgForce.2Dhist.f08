@@ -24,8 +24,8 @@ endmodule prec
 ! data for the density and force tables.
 module histData
 	use prec
-	real(kind=dp), allocatable	:: histDist(:), histAng(:), histFrc(:,:), histG(:,:), R_axis(:), fAvg(:), u_dir(:), &
-		x_axis(:), z_axis(:)
+	real(kind=dp), allocatable	:: histDist(:), histAng(:), histFrc(:,:), histGr(:,:), R_axis(:), fAvg(:), u_dir(:), &
+		& x_axis(:), z_axis(:)
 	real(kind=dp)				:: histDist_step_size
 	integer						:: num_R_bins, numFrcLines
 
@@ -50,7 +50,7 @@ endmodule thetaData
 ! testing arrays for force and g(r)
 module ctrlData
 	use prec
-	real(kind=dp), allocatable :: linAvg(:,:), grSPA(:,:), lin_outArray(:)
+	real(kind=dp), allocatable :: linAvg(:,:), grSPA(:,:), fxArray(:)
 
 endmodule ctrlData
 
@@ -299,7 +299,7 @@ subroutine make_hist_table(histFile)
 		endif
 	enddo
 	
-	allocate( histDist(nDistBins), histAng(nThetaBins), histFrc(nDistBins,nThetaBins), histG(nDistBins,nThetaBins) )
+	allocate( histDist(nDistBins), histAng(nThetaBins), histFrc(nDistBins,nThetaBins), histGr(nDistBins,nThetaBins) )
 	
 	! populate arrays that will be used in the rest of the calculation from temp array
 	do i = 1, nDistBins		! the values printed out from python script are at half-bin distances
@@ -310,7 +310,7 @@ subroutine make_hist_table(histFile)
 	enddo
 	do i = 1, nDistBins
 		do j = 1, nThetaBins
-			histG(i,j) = histTmp(3,i+j)
+			histGr(i,j) = histTmp(3,i+j)
 			histFrc(i,j) = histTmp(4,i+j)
 		enddo
 	enddo
@@ -328,7 +328,7 @@ subroutine compute_avg_force
 	use ctrlData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: gx, lin_out, pi, phiLF, phi_max, phi_min
+	real(kind=dp)	:: gx, fx, pi, phiLF, phi_max, phi_min
 
 	pi = 3.1415926535_dp
 
@@ -347,8 +347,8 @@ subroutine compute_avg_force
 	z_axis = 0_dp
 
 	! allocate arrays for testing arrays
-	allocate( linAvg(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins), lin_outArray(num_x_bins) )
-	lin_outArray = 0_dp
+	allocate( linAvg(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins), fxArray(num_x_bins) )
+	fxArray = 0_dp
 	linAvg = 0_dp
 	grSPA = 0_dp
 
@@ -404,33 +404,33 @@ subroutine compute_avg_force
 						if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
 							gx = 0_dp ! avoid NaNs in calc_cosTh
 						else
-							call calc_cosTh(iphiLF,ithLF)
+							call calc_cosTh(iphiLF, ithLF)
 
 							! FIXME: bilinearly interpolate g(r, cos)
 							!call g12(gx)
-							call bilin_interpolate(histG, gx)
+							call bilin_interpolate(histGr, gx)
 						endif
 
 						! if gx == 0 then don't waste time with the rest of the calculation
 						if (gx .gt. 1d-6) then
 							! FIXME: bilinearly interpolate frc(r, cos)
-							call bilin_interpolate(rSolv1n,cosTh1)
-							call lin_interpolate(alp1,lin_out)
+							!call lin_interpolate(alp1, lin_out)
+							call bilin_interpolate(histFrc, fx)
 
 							!			'gx' is Kirkwood Super Position Approximation of g(r)
-							! 			'lin_out' is ||fs(x,z)||, force from solvent at (x,z)
-							!			Now we need cos(theta) and z and we should have the integral.
+							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
+							!			need cos(theta) and z and we should have the integral.
 
-							fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							linAvg(i,j) = linAvg(i,j) + lin_out
-							lin_outArray(i) = lin_outArray(i) + lin_out*xz_step_size
+							fAvg(r) = fAvg(r) + ( gx * (-1)*fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+							linAvg(i,j) = linAvg(i,j) + fx
+							fxArray(i) = fxArray(i) + fx*xz_step_size
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
 					enddo !phi
 				enddo !theta
 			enddo !z
 		enddo !x
-		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and lin_out arrays
+		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and fx arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
@@ -492,27 +492,6 @@ subroutine bilin_interpolate(hist_array, bi_out)
 		& rb/rd*hist_array(ir2,ic2))
 
 endsubroutine bilin_interpolate
-
-
-! bilinearly interpolate between force at q11, q12, q21, and q22 to give output force.
-subroutine lin_interpolate(alp, lin_out)
-	use histData
-	implicit none
-	integer 		:: i1, i2	! the left and right flanking indices
-	real(kind=dp) 	:: float_index, alp, lin_out
-
-	float_index = alp / fDist_step_size + 0.5 ! forces come from half bin position. print lin_out(alp) compare to MD sim.
-	i1 = floor(float_index)
-	i2 = i1 + 1
-
-	if (i2 .ge. numFrcLines) then
-		lin_out = 0_dp
-	else
-		lin_out = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
-	endif
-
-	!write(*,*) 'alp: ', alp, '   lin_out: ', lin_out
-endsubroutine lin_interpolate
 
 
 ! integrate the average force from 'compute_avg_force' to get the PMF.
