@@ -24,18 +24,18 @@ endmodule prec
 ! data for the density and force tables.
 module histData
 	use prec
-	real(kind=dp), allocatable	:: histDist(:), histAng(:), histFrc(:,:), histGr(:,:), R_axis(:), fAvg(:), u_dir(:), &
-		& x_axis(:), z_axis(:)
-	real(kind=dp)				:: histDist_step_size
-	integer						:: num_R_bins, numFrcLines
+	real(kind=dp), allocatable	:: histDist(:), histAng(:), hist2D(:,:,:), R_axis(:), fAvg(:), u_dir(:), &
+		x_axis(:), z_axis(:)
+	real(kind=dp)				:: histDist_step_size, histCosTh_step_size
+	integer						:: num_R_bins, nDistBins, nThetaBins
 
 endmodule histData
 
 ! data from the config file.
 module cfgData
 	use prec
-	real(kind=dp)	:: R_step_size, xz_step_size, R_min, R_max, xz_range, phi_step_size, cosTheta_step_size
-	integer			:: nThetaBins, phi_bins
+	real(kind=dp)	:: R_step_size, xz_step_size, R_min, R_max, xz_range, phi_step_size
+	integer			:: phi_bins
 
 endmodule cfgData
 
@@ -43,7 +43,7 @@ endmodule cfgData
 module thetaData
 	use prec
 	real(kind=dp), allocatable	:: cosThetaLF(:), sinThetaLF(:), sinPhiLF(:), cosPhiLF(:)
-	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n
+	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1, cosTh2
 
 endmodule thetaData
 
@@ -242,7 +242,7 @@ subroutine make_hist_table(histFile)
 	character(len=64)			:: histFile
 	character(len=32)			:: junk
 	character(len=256)			:: line
-	integer						:: ios, i
+	integer						:: ios, i, j, nHistLines
 	real(kind=dp), allocatable	:: histTmp(:,:)
 
 	! read number of lines in histFile and allocate that many points in temporary histogram list.
@@ -299,7 +299,7 @@ subroutine make_hist_table(histFile)
 		endif
 	enddo
 	
-	allocate( histDist(nDistBins), histAng(nThetaBins), histFrc(nDistBins,nThetaBins), histGr(nDistBins,nThetaBins) )
+	allocate( histDist(nDistBins), histAng(nThetaBins), hist2D(2,nDistBins,nThetaBins) )
 	
 	! populate arrays that will be used in the rest of the calculation from temp array
 	do i = 1, nDistBins		! the values printed out from python script are at half-bin distances
@@ -310,12 +310,13 @@ subroutine make_hist_table(histFile)
 	enddo
 	do i = 1, nDistBins
 		do j = 1, nThetaBins
-			histGr(i,j) = histTmp(3,i+j)
-			histFrc(i,j) = histTmp(4,i+j)
+			hist2D(1,i,j) = histTmp(3,i+j) ! g(r,cos)
+			hist2D(2,i,j) = histTmp(4,i+j) ! frc(r,cos)
 		enddo
 	enddo
 
 	histDist_step_size = histDist(2) - histDist(1)
+	histCosTh_step_size = histAng(2) - histAng(1)
 
 endsubroutine make_hist_table
 
@@ -328,7 +329,7 @@ subroutine compute_avg_force
 	use ctrlData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: gx, fx, pi, phiLF, phi_max, phi_min
+	real(kind=dp)	:: gx, fx, pi, phiLF, phi_max, phi_min, cosTh_max, cosTh_min
 
 	pi = 3.1415926535_dp
 
@@ -365,12 +366,11 @@ subroutine compute_avg_force
 
 	! Angles
 	allocate( cosThetaLF(nThetaBins), sinThetaLF(nThetaBins), sinPhiLF(phi_bins), cosPhiLF(phi_bins) )
-	cosTheta_step_size = (cosTh_max - cosTh_min) / real(nThetaBins, dp)
 	do ithLF = 1, nThetaBins
-		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cosTheta_step_size - 1_dp
+		cosThetaLF(ithLF) = (ithLF-0.5_dp)*histCosTh_step_size - 1_dp
 		sinThetaLF(ithLF) = dsqrt(abs(1_dp-cosThetaLF(ithLF)**2))
 	enddo
-	write(*,*) "Cos(Theta) Step Size: ", cosTheta_step_size
+	write(*,*) "Cos(Theta) Step Size: ", histCosTh_step_size
 	phi_max = 2_dp*pi
 	phi_min = 0_dp
 	phi_step_size = (phi_max - phi_min) / real(phi_bins, dp)
@@ -408,22 +408,22 @@ subroutine compute_avg_force
 
 							! FIXME: bilinearly interpolate g(r, cos)
 							!call g12(gx)
-							call bilin_interpolate(histGr, gx)
+							call bilin_interpolate(1, gx) ! 1 is the index for the g(r,cos)
 						endif
 
 						! if gx == 0 then don't waste time with the rest of the calculation
 						if (gx .gt. 1d-6) then
 							! FIXME: bilinearly interpolate frc(r, cos)
 							!call lin_interpolate(alp1, lin_out)
-							call bilin_interpolate(histFrc, fx)
+							call bilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos)
 
-							!			'gx' is Kirkwood Super Position Approximation of g(r)
+							!			'gx' is the g(r) value taken from a histogram of g(r,cosTh)
 							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
 							!			need cos(theta) and z and we should have the integral.
 
-							fAvg(r) = fAvg(r) + ( gx * (-1)*fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+							fAvg(r) = fAvg(r) + ( gx * (-1) * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
 							linAvg(i,j) = linAvg(i,j) + fx
-							fxArray(i) = fxArray(i) + fx*xz_step_size
+							fxArray(i) = fxArray(i) + fx * xz_step_size
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
 					enddo !phi
@@ -434,7 +434,7 @@ subroutine compute_avg_force
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cosTheta_step_size
+		fAvg(r) = fAvg(r)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*histCosTh_step_size
 	enddo !r
 
 endsubroutine compute_avg_force
@@ -446,7 +446,7 @@ subroutine calc_cosTh(iphiLF, ithLF)
 	use thetaData
 	implicit none
 	integer			:: iphiLF, ithLF
-	real(kind=dp)	:: p(3), cosTh1, cosTh2
+	real(kind=dp)	:: p(3)
 
 	! make rotated solvent vector at origin
 	p(1) = sinPhiLF(iphiLF)*sinThetaLF(ithLF)
@@ -461,35 +461,34 @@ endsubroutine calc_cosTh
 
 
 ! bilinearly interpolate
-subroutine bilin_interpolate(hist_array, bi_out)
+subroutine bilin_interpolate(ihist, fP)
+	use cfgData
+	use histData
 	use thetaData
 	implicit none
-	integer			:: ir1, ir2, ic1, ic2
-	real(kind=dp)	:: float_index, ra, rb, rd, cd, fR1, fR2, fP
+	integer						:: ihist, ir1, ir2, ic1, ic2
+	real(kind=dp)				:: f_index, r1, r2, c1, c2, ra, rb, rd, cd, fR1, fR2, fP
 
-	float_index = rSolv1n / r_step_size + 0.5_dp ! forces come from half bin position.
+	f_index = rSolv1n / R_step_size + 0.5_dp ! forces come from half bin position.
 	ir1 = floor(f_index) ! get flanking r indicies
 	ir2 = ir1 + 1
+	r1 = histDist(ir1)
+	r2 = histDist(ir2)
 
-	float_index = cosTh1 / cosTheta_step_size + 0.5_dp
+	f_index = cosTh1 / histCosTh_step_size + 0.5_dp
 	ic1 = floor(f_index) ! get flanking cosTh indicies
 	ic2 = ic1 + 1
-
-	f11 = hist_array(ir1, ic1)
-	f12 = hist_array(ir1, ic2)
-	f21 = hist_array(ir2, ic1)
-	f22 = hist_array(ir2, ic2)
+	c1 = histAng(ic1)
+	c2 = histAng(ic2)
 
 	! fixme: define r1, r2, c1, and c2
 	ra = r2-rSolv1n
 	rb = rSolv1n-r1
 	rd = r2-r1
 
-	!fR1 = ra/rd*hist_array(ir1,ic1) + rb/rd*hist_array(ir2,ic1)
-	!fR2 = ra/rd*hist_array(ir1,ic2) + rb/rd*hist_array(ir2,ic2)
 	cd = c2-c1
-	bi_out = (c2-c)/cd*(ra/rd*hist_array(ir1,ic1) + rb/rd*hist_array(ir2,ic1)) + (c-c1)/cd*(ra/rd*hist_array(ir1,ic2) + &
-		& rb/rd*hist_array(ir2,ic2))
+	fP = (c2-cosTh1)/cd*(ra/rd*hist2D(ihist,ir1,ic1) + rb/rd*hist2D(ihist,ir2,ic1)) + (cosTh1-c1)/cd*(ra/rd*hist2D(ihist,ir1,ic2) &
+		+ rb/rd*hist2D(ihist,ir2,ic2))
 
 endsubroutine bilin_interpolate
 
