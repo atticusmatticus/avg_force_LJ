@@ -34,8 +34,8 @@ endmodule histData
 ! data from the config file.
 module cfgData
 	use prec
-	real(kind=dp)	:: R_step_size, xz_step_size, R_min, R_max, xz_range, phi_step_size
-	integer			:: phi_bins
+	real(kind=dp)	:: R_step_size, xz_step_size, R_min, R_max, xz_range, cfgCosTh_step_size, phi_step_size
+	integer			:: cfgCosTh_bins, nPhiBins
 
 endmodule cfgData
 
@@ -43,7 +43,7 @@ endmodule cfgData
 module thetaData
 	use prec
 	real(kind=dp), allocatable	:: cosThetaLF(:), sinThetaLF(:), sinPhiLF(:), cosPhiLF(:)
-	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1, cosTh2
+	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1 !, cosTh2
 
 endmodule thetaData
 
@@ -77,13 +77,13 @@ program compute_avgForce
 	call make_hist_table(histFile)
 	
 	! compute average force integral.
-	!call compute_avg_force
+	call compute_avg_force
 	
 	! integrate average force to get PMF.
-	!call integrate_force
+	call integrate_force
 
 	! write PMF output file
-	!call write_output(outFile)
+	call write_output(outFile)
 	
 	! Print time taken to finish calculation.
 	tf = omp_get_wtime()
@@ -153,15 +153,16 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=128) 	:: line
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
-	logical 			:: RstepSizeFlag, xzStepSizeFlag, outFileFlag, RmaxFlag, RminFlag, xzRangeFlag, phiBinsFlag
+	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, phiBinsFlag, thetaBinsFlag
 
+	outFileFlag = .false.
 	RstepSizeFlag = .false.
 	xzStepSizeFlag = .false.
-	outFileFlag = .false.
 	RmaxFlag = .false.
 	RminFlag = .false.
 	xzRangeFlag = .false.
 	phiBinsFlag = .false.
+	thetaBinsFlag = .false.
 
 	ios = 0
 
@@ -170,7 +171,11 @@ subroutine read_cfg(cfgFile, outFile)
 		read(20,'(a)',IOSTAT=ios) line
 		call split(line,'=',firstWord, sep)
 		if (line .ne. "") then
-			if (firstWord .eq. "R_step_size") then
+			if (firstWord .eq. "out_file") then
+				read(line,*) outFile
+				write(*,*) "Output File:	", outFile
+				outFileFlag = .true.
+			else if (firstWord .eq. "R_step_size") then
 				read(line,*) R_step_size
 				write(*,*) "PMF Step Size:	", R_step_size
 				RstepSizeFlag = .true.
@@ -178,10 +183,6 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) xz_step_size
 				write(*,*) "Solvent Grid Step Size:	", xz_step_size
 				xzStepSizeFlag = .true.
-			else if (firstWord .eq. "out_file") then
-				read(line,*) outFile
-				write(*,*) "Output File:	", outFile
-				outFileFlag = .true.
 			else if (firstWord .eq. "R_max") then
 				read(line,*) R_max
 				write(*,*) "R Maximum Value:	", R_max
@@ -194,9 +195,13 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) xz_range
 				write(*,*) "XZ - Range:	", xz_range
 				xzRangeFlag = .true.
+			else if (firstWord .eq. "theta_bins") then
+				read(line,*) cfgCosTh_bins
+				write(*,*) "Theta Bins:	", cfgCosTh_bins
+				thetaBinsFlag= .true.
 			else if (firstWord .eq. "phi_bins") then
-				read(line,*) phi_bins
-				write(*,*) "Phi Bins:	", phi_bins
+				read(line,*) nPhiBins
+				write(*,*) "Phi Bins:	", nPhiBins
 				phiBinsFlag= .true.
 			endif
 		endif
@@ -229,6 +234,10 @@ subroutine read_cfg(cfgFile, outFile)
 	endif
 	if (phiBinsFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'phi_bins' value"
+		stop
+	endif
+	if (thetaBinsFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'cfgCosTh_bins' value"
 		stop
 	endif
 
@@ -288,16 +297,16 @@ subroutine make_hist_table(histFile)
 		else ! i = 2, nHistLines
 			if ( (histTmp(1,i) .lt. (histTmp(1,i-1)-1d-6)) .or. (histTmp(1,i) .gt. (histTmp(1,i-1)+1d-6)) ) then
 				nDistBins = nDistBins + 1
-				print *, "nDistBins: ", nDistBins
 			endif
 			if ( (histTmp(2,i) .gt. (histTmp(2,1)-1d-6)) .and. (histTmp(2,i) .lt. (histTmp(2,1)+1d-6)) .and. (ios .eq. 0) ) then
 				! xxx: this statement will trigger when i = nThetaBins + 1 because it finds the first repeated element
 				nThetaBins = i - 1
-				print *, "nThetaBins: ", nThetaBins
 				ios = 1
 			endif
 		endif
 	enddo
+	print *, "Histogram Distance Bins: ", nDistBins
+	print *, "Histogram Cosine Theta Bins: ", nThetaBins
 	
 	allocate( histDist(nDistBins), histAng(nThetaBins), hist2D(2,nDistBins,nThetaBins) )
 	
@@ -365,16 +374,19 @@ subroutine compute_avg_force
 	enddo
 
 	! Angles
-	allocate( cosThetaLF(nThetaBins), sinThetaLF(nThetaBins), sinPhiLF(phi_bins), cosPhiLF(phi_bins) )
-	do ithLF = 1, nThetaBins
-		cosThetaLF(ithLF) = (ithLF-0.5_dp)*histCosTh_step_size - 1_dp
+	allocate( cosThetaLF(cfgCosTh_bins), sinThetaLF(cfgCosTh_bins), sinPhiLF(nPhiBins), cosPhiLF(nPhiBins) )
+	cosTh_max = 1_dp
+	cosTh_min = -1_dp
+	cfgCosTh_step_size = (cosTh_max - cosTh_min) / real(cfgCosTh_bins, dp)
+	do ithLF = 1, cfgCosTh_bins
+		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cfgCosTh_step_size - 1_dp
 		sinThetaLF(ithLF) = dsqrt(abs(1_dp-cosThetaLF(ithLF)**2))
 	enddo
 	write(*,*) "Cos(Theta) Step Size: ", histCosTh_step_size
 	phi_max = 2_dp*pi
 	phi_min = 0_dp
-	phi_step_size = (phi_max - phi_min) / real(phi_bins, dp)
-	do iphiLF = 1, phi_bins
+	phi_step_size = (phi_max - phi_min) / real(nPhiBins, dp)
+	do iphiLF = 1, nPhiBins
 		phiLF = (iphiLF+0.5_dp)*phi_step_size
 		sinPhiLF(iphiLF) = dsin(phiLF)
 		cosPhiLF(iphiLF) = dcos(phiLF)
@@ -398,8 +410,8 @@ subroutine compute_avg_force
 				rSolv2n = norm2(rSolv2)
 
 				! loop through orientations of solvent at x(i) and z(j)
-				do ithLF = 1, nThetaBins
-					do iphiLF = 1, phi_bins
+				do ithLF = 1, cfgCosTh_bins
+					do iphiLF = 1, nPhiBins
 
 						if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
 							gx = 0_dp ! avoid NaNs in calc_cosTh
@@ -434,7 +446,7 @@ subroutine compute_avg_force
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*histCosTh_step_size
+		fAvg(r) = fAvg(r)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cfgCosTh_step_size
 	enddo !r
 
 endsubroutine compute_avg_force
@@ -455,7 +467,7 @@ subroutine calc_cosTh(iphiLF, ithLF)
 
 	! calculate cos(theta1) and cos(theta2) relative to lj-spheres 1 and 2.
 	cosTh1 = dot_product(rSolv1, p) / rSolv1n
-	cosTh2 = dot_product(rSolv2, p) / rSolv2n ! fixme is this needed?
+	!cosTh2 = dot_product(rSolv2, p) / rSolv2n ! fixme is this needed?
 
 endsubroutine calc_cosTh
 
@@ -481,7 +493,6 @@ subroutine bilin_interpolate(ihist, fP)
 	c1 = histAng(ic1)
 	c2 = histAng(ic2)
 
-	! fixme: define r1, r2, c1, and c2
 	ra = r2-rSolv1n
 	rb = rSolv1n-r1
 	rd = r2-r1
@@ -550,9 +561,9 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 
 	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
 	write(temp,frmt) r ! converting integer to string using 'internal file'
-	filename='ellipse_output.'//trim(temp)//'.dat'
+	filename='hist2D_output.'//trim(temp)//'.dat'
 
-	norm_const = 1_dp / real(nThetaBins, dp) / real(phi_bins, dp)
+	norm_const = 1_dp / real(cfgCosTh_bins, dp) / real(nPhiBins, dp)
 
 	open(35,file=filename)
 	write(6,*) "Writing test file:	", filename
