@@ -24,18 +24,19 @@ endmodule prec
 ! data for the density and force tables.
 module histData
 	use prec
-	real(kind=dp), allocatable	:: histDist(:), histAng(:), hist2D(:,:,:), R_axis(:), fAvg(:), u_dir(:), &
-		x_axis(:), z_axis(:)
-	real(kind=dp)				:: histDist_step_size, histCosTh_step_size
-	integer						:: num_R_bins, nDistBins, nThetaBins
+	real(kind=dp), allocatable	:: histDist(:), histAng(:), hist2D(:,:,:)
+	real(kind=dp)				:: histDist_step_size, histCosTh_step_size, hHistDist_step_size
+	integer						:: histDistBins, histCosThBins
 
 endmodule histData
 
 ! data from the config file.
 module cfgData
 	use prec
-	real(kind=dp)	:: R_step_size, xz_step_size, R_min, R_max, xz_range, cfgCosTh_step_size, phi_step_size
-	integer			:: cfgCosTh_bins, nPhiBins
+	real(kind=dp), allocatable	:: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
+	real(kind=dp)				:: R_step_size, xz_step_size, R_min, R_max, xz_range, cosTh_max, cosTh_min, cfgCosTh_step_size, &
+		phi_step_size
+	integer						:: num_R_bins, cfgCosTh_bins, cfgPhiBins
 
 endmodule cfgData
 
@@ -50,7 +51,7 @@ endmodule thetaData
 ! testing arrays for force and g(r)
 module ctrlData
 	use prec
-	real(kind=dp), allocatable :: linAvg(:,:), grSPA(:,:), fxArray(:)
+	real(kind=dp), allocatable :: frcSPA(:,:), grSPA(:,:)
 
 endmodule ctrlData
 
@@ -75,7 +76,7 @@ program compute_avgForce
 
 	! make list of average direct force from 'collapsed' file.
 	call make_hist_table(histFile)
-	
+
 	! compute average force integral.
 	call compute_avg_force
 	
@@ -200,8 +201,8 @@ subroutine read_cfg(cfgFile, outFile)
 				write(*,*) "Theta Bins:	", cfgCosTh_bins
 				thetaBinsFlag= .true.
 			else if (firstWord .eq. "phi_bins") then
-				read(line,*) nPhiBins
-				write(*,*) "Phi Bins:	", nPhiBins
+				read(line,*) cfgPhiBins
+				write(*,*) "Phi Bins:	", cfgPhiBins
 				phiBinsFlag= .true.
 			endif
 		endif
@@ -266,11 +267,11 @@ subroutine make_hist_table(histFile)
 	enddo
 	close(20)
 
-!	nDistBins = int(dble(numHistLines) / dble(nThetaBins))
-!	print*, "Number of distance bins in hist table: should be 250!!: ", nDistBins
+!	histDistBins = int(dble(numHistLines) / dble(histCosThBins))
+!	print*, "Number of distance bins in hist table: should be 250!!: ", histDistBins
 	! XXX: I wonder if i could read in each r value from the hist table and see if it's within .000001 of the previous value read
-	! in. If so then ignore it, if not then add it to array and increment nDistBins variable. This would be a good way for getting
-	! the nDistBins and nThetaBins from the table itself rather than the config file or hard coding.
+	! in. If so then ignore it, if not then add it to array and increment histDistBins variable. This would be a good way for getting
+	! the histDistBins and histCosThBins from the table itself rather than the config file or hard coding.
 
 	allocate( histTmp(4,nHistLines) )
 
@@ -292,53 +293,55 @@ subroutine make_hist_table(histFile)
 	! XXX: Unique value determination -- TESTING
 	do i = 1, nHistLines
 		if (i .eq. 1) then
-			nDistBins = 1
+			histDistBins = 1
 			ios = 0
 		else ! i = 2, nHistLines
 			if ( (histTmp(1,i) .lt. (histTmp(1,i-1)-1d-6)) .or. (histTmp(1,i) .gt. (histTmp(1,i-1)+1d-6)) ) then
-				nDistBins = nDistBins + 1
+				histDistBins = histDistBins + 1
 			endif
 			if ( (histTmp(2,i) .gt. (histTmp(2,1)-1d-6)) .and. (histTmp(2,i) .lt. (histTmp(2,1)+1d-6)) .and. (ios .eq. 0) ) then
-				! xxx: this statement will trigger when i = nThetaBins + 1 because it finds the first repeated element
-				nThetaBins = i - 1
+				! xxx: this statement will trigger when i = histCosThBins + 1 because it finds the first repeated element
+				histCosThBins = i - 1
 				ios = 1
 			endif
 		endif
 	enddo
-	print *, "Histogram Distance Bins: ", nDistBins
-	print *, "Histogram Cosine Theta Bins: ", nThetaBins
+	print *, "Histogram Distance Bins: ", histDistBins
+	print *, "Histogram Cosine Theta Bins: ", histCosThBins
 	
-	allocate( histDist(nDistBins), histAng(nThetaBins), hist2D(2,nDistBins,nThetaBins) )
+	allocate( histDist(histDistBins), histAng(histCosThBins), hist2D(2,histDistBins,histCosThBins) )
 	
 	! populate arrays that will be used in the rest of the calculation from temp array
-	do i = 1, nDistBins		! the values printed out from python script are at half-bin distances
-		histDist(i) = histTmp(1,nThetaBins*i-1)
+	do i = 1, histDistBins		! the values printed out from python script are at half-bin distances
+		histDist(i) = histTmp(1,histCosThBins*i-1)
 	enddo
-	do i = 1, nThetaBins
+	do i = 1, histCosThBins
 		histAng(i) = histTmp(2,i)
 	enddo
-	do i = 1, nDistBins
-		do j = 1, nThetaBins
+	do i = 1, histDistBins
+		do j = 1, histCosThBins
 			hist2D(1,i,j) = histTmp(3,i+j) ! g(r,cos)
 			hist2D(2,i,j) = histTmp(4,i+j) ! frc(r,cos)
 		enddo
 	enddo
 
 	histDist_step_size = histDist(2) - histDist(1)
+	hHistDist_step_size = histDist_step_size / 2_dp
+	write(*,*) "Histogram Distance Step Size: ", histDist_step_size
 	histCosTh_step_size = histAng(2) - histAng(1)
+	write(*,*) "Histogram Angle Step Size: ", histCosTh_step_size
 
 endsubroutine make_hist_table
 
 
 ! do the average force integral
 subroutine compute_avg_force
-	use histData
 	use cfgData
 	use thetaData
 	use ctrlData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: gx, fx, pi, phiLF, phi_max, phi_min, cosTh_max, cosTh_min
+	real(kind=dp)	:: gx, fx, pi, phiLF, phi_max, phi_min
 
 	pi = 3.1415926535_dp
 
@@ -357,10 +360,7 @@ subroutine compute_avg_force
 	z_axis = 0_dp
 
 	! allocate arrays for testing arrays
-	allocate( linAvg(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins), fxArray(num_x_bins) )
-	fxArray = 0_dp
-	linAvg = 0_dp
-	grSPA = 0_dp
+	allocate( frcSPA(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
 
 	! Distance Axes
 	do r = 1, num_R_bins
@@ -374,7 +374,7 @@ subroutine compute_avg_force
 	enddo
 
 	! Angles
-	allocate( cosThetaLF(cfgCosTh_bins), sinThetaLF(cfgCosTh_bins), sinPhiLF(nPhiBins), cosPhiLF(nPhiBins) )
+	allocate( cosThetaLF(cfgCosTh_bins), sinThetaLF(cfgCosTh_bins), sinPhiLF(cfgPhiBins), cosPhiLF(cfgPhiBins) )
 	cosTh_max = 1_dp
 	cosTh_min = -1_dp
 	cfgCosTh_step_size = (cosTh_max - cosTh_min) / real(cfgCosTh_bins, dp)
@@ -382,11 +382,11 @@ subroutine compute_avg_force
 		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cfgCosTh_step_size - 1_dp
 		sinThetaLF(ithLF) = dsqrt(abs(1_dp-cosThetaLF(ithLF)**2))
 	enddo
-	write(*,*) "Cos(Theta) Step Size: ", histCosTh_step_size
+	write(*,*) "Cos(Theta) Step Size: ", cfgCosTh_step_size
 	phi_max = 2_dp*pi
 	phi_min = 0_dp
-	phi_step_size = (phi_max - phi_min) / real(nPhiBins, dp)
-	do iphiLF = 1, nPhiBins
+	phi_step_size = (phi_max - phi_min) / real(cfgPhiBins, dp)
+	do iphiLF = 1, cfgPhiBins
 		phiLF = (iphiLF+0.5_dp)*phi_step_size
 		sinPhiLF(iphiLF) = dsin(phiLF)
 		cosPhiLF(iphiLF) = dcos(phiLF)
@@ -395,7 +395,7 @@ subroutine compute_avg_force
 
 	! Calculate the average force integral for top half of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
-		linAvg = 0_dp
+		frcSPA = 0_dp
 		grSPA = 0_dp
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
@@ -411,7 +411,7 @@ subroutine compute_avg_force
 
 				! loop through orientations of solvent at x(i) and z(j)
 				do ithLF = 1, cfgCosTh_bins
-					do iphiLF = 1, nPhiBins
+					do iphiLF = 1, cfgPhiBins
 
 						if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
 							gx = 0_dp ! avoid NaNs in calc_cosTh
@@ -421,6 +421,7 @@ subroutine compute_avg_force
 							! FIXME: bilinearly interpolate g(r, cos)
 							!call g12(gx)
 							call bilin_interpolate(1, gx) ! 1 is the index for the g(r,cos)
+							print*, "gx: ",gx
 						endif
 
 						! if gx == 0 then don't waste time with the rest of the calculation
@@ -428,14 +429,14 @@ subroutine compute_avg_force
 							! FIXME: bilinearly interpolate frc(r, cos)
 							!call lin_interpolate(alp1, lin_out)
 							call bilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos)
+							print*, "fx: ",fx
 
 							!			'gx' is the g(r) value taken from a histogram of g(r,cosTh)
 							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
 							!			need cos(theta) and z and we should have the integral.
 
 							fAvg(r) = fAvg(r) + ( gx * (-1) * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							linAvg(i,j) = linAvg(i,j) + fx
-							fxArray(i) = fxArray(i) + fx * xz_step_size
+							frcSPA(i,j) = frcSPA(i,j) + fx
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
 					enddo !phi
@@ -478,21 +479,27 @@ subroutine bilin_interpolate(ihist, fP)
 	use histData
 	use thetaData
 	implicit none
-	integer						:: ihist, ir1, ir2, ic1, ic2
-	real(kind=dp)				:: f_index, r1, r2, c1, c2, ra, rb, rd, cd, fR1, fR2, fP
+	integer			:: ihist, ir1, ir2, ic1, ic2
+	real(kind=dp)	:: f_index, r1, r2, c1, c2, ra, rb, rd, cd, fR1, fR2, fP
 
-	f_index = rSolv1n / R_step_size + 0.5_dp ! forces come from half bin position.
+	f_index = (rSolv1n - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
 	ir1 = floor(f_index) ! get flanking r indicies
+	if (ir1 .ge. histDistBins) then
+		ir1 = histDistBins - 1_dp ! put larger solvent positon values in the last bin of the histogram
+	endif
 	ir2 = ir1 + 1
 	r1 = histDist(ir1)
 	r2 = histDist(ir2)
 
-	f_index = cosTh1 / histCosTh_step_size + 0.5_dp
+	f_index = (cosTh1 - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
 	ic1 = floor(f_index) ! get flanking cosTh indicies
 	ic2 = ic1 + 1
 	c1 = histAng(ic1)
 	c2 = histAng(ic2)
 
+	if (rSolv1n .gt. r2) then
+		rSolv1n = r2 ! if the solvent was far away enough to get repositioned into the last bin, set the distance to the last bin
+	endif
 	ra = r2-rSolv1n
 	rb = rSolv1n-r1
 	rd = r2-r1
@@ -506,7 +513,6 @@ endsubroutine bilin_interpolate
 
 ! integrate the average force from 'compute_avg_force' to get the PMF.
 subroutine integrate_force
-	use histData
 	use cfgData
 	implicit none
 	integer 		:: d
@@ -525,9 +531,43 @@ subroutine integrate_force
 endsubroutine integrate_force
 
 
+! write force out and g(r) out to compare against explicit
+subroutine write_test_out(r, num_x_bins, num_z_bins)
+	use cfgData
+	use ctrlData
+	implicit none
+	integer				:: r, i, j, num_x_bins, num_z_bins
+	real(kind=dp)		:: norm_const
+	character(len=32)	:: temp, filename
+	character(len=8)	:: frmt
+
+	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
+	write(temp,frmt) r ! converting integer to string using 'internal file'
+	filename='hist2D_output.'//trim(temp)//'.dat'
+
+	norm_const = 1_dp / real(cfgCosTh_bins, dp) / real(cfgPhiBins, dp)
+
+	open(35,file=filename)
+	write(6,*) "Writing test file:	", filename
+	write(35,*) "# 1.	X Distance"
+	write(35,*) "# 2.	Z Distance"
+	write(35,*) "# 3.	Avg Force List"
+	write(35,*) "# 4.	g(r) List"
+	do i = 1, num_x_bins
+		do j = 1, num_z_bins
+			write(35,898) x_axis(i), z_axis(j), frcSPA(i,j)*norm_const, grSPA(i,j)*norm_const
+		enddo
+	enddo
+	close(35)
+	
+898		format (4(1x,f16.12))
+
+endsubroutine write_test_out
+
+
 ! write output file
 subroutine write_output(outFile)
-	use histData
+	use cfgData
 	implicit none
 	character(len=64) 	:: outFile
 	integer 			:: r
@@ -543,41 +583,6 @@ subroutine write_output(outFile)
 	close(35)
 
 899		format (3(1x,f16.12))
-!899		format (3(1x,e20.10)) ! scientific format
+!899		format (3(1x,e16.12)) ! scientific format
 
 endsubroutine write_output
-
-
-! write force out and g(r) out to compare against explicit
-subroutine write_test_out(r, num_x_bins, num_z_bins)
-	use histData
-	use cfgData
-	use ctrlData
-	implicit none
-	integer				:: r, i, j, num_x_bins, num_z_bins
-	real(kind=dp)		:: norm_const
-	character(len=32)	:: temp, filename
-	character(len=8)	:: frmt
-
-	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
-	write(temp,frmt) r ! converting integer to string using 'internal file'
-	filename='hist2D_output.'//trim(temp)//'.dat'
-
-	norm_const = 1_dp / real(cfgCosTh_bins, dp) / real(nPhiBins, dp)
-
-	open(35,file=filename)
-	write(6,*) "Writing test file:	", filename
-	write(35,*) "# 1.	X Distance"
-	write(35,*) "# 2.	Z Distance"
-	write(35,*) "# 3.	Avg Force List"
-	write(35,*) "# 4.	g(r) List"
-	do i = 1, num_x_bins
-		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), linAvg(i,j)*norm_const, grSPA(i,j)*norm_const
-		enddo
-	enddo
-	close(35)
-	
-898		format (4(1x,f16.12))
-
-endsubroutine write_test_out
