@@ -44,7 +44,7 @@ endmodule cfgData
 module thetaData
 	use prec
 	real(kind=dp), allocatable	:: cosThetaLF(:), sinThetaLF(:), sinPhiLF(:), cosPhiLF(:)
-	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1 !, cosTh2
+	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1, cosTh2
 
 endmodule thetaData
 
@@ -270,8 +270,8 @@ subroutine make_hist_table(histFile)
 !	histDistBins = int(dble(numHistLines) / dble(histCosThBins))
 !	print*, "Number of distance bins in hist table: should be 250!!: ", histDistBins
 	! XXX: I wonder if i could read in each r value from the hist table and see if it's within .000001 of the previous value read
-	! in. If so then ignore it, if not then add it to array and increment histDistBins variable. This would be a good way for getting
-	! the histDistBins and histCosThBins from the table itself rather than the config file or hard coding.
+	! in. If so then ignore it, if not then add it to array and increment histDistBins variable. This would be a good way for
+	! getting the histDistBins and histCosThBins from the table itself rather than the config file or hard coding.
 
 	allocate( histTmp(4,nHistLines) )
 
@@ -300,7 +300,7 @@ subroutine make_hist_table(histFile)
 				histDistBins = histDistBins + 1
 			endif
 			if ( (histTmp(2,i) .gt. (histTmp(2,1)-1d-6)) .and. (histTmp(2,i) .lt. (histTmp(2,1)+1d-6)) .and. (ios .eq. 0) ) then
-				! xxx: this statement will trigger when i = histCosThBins + 1 because it finds the first repeated element
+				! note: this statement will trigger when i = histCosThBins + 1 because it finds the first repeated element
 				histCosThBins = i - 1
 				ios = 1
 			endif
@@ -318,12 +318,19 @@ subroutine make_hist_table(histFile)
 	do i = 1, histCosThBins
 		histAng(i) = histTmp(2,i)
 	enddo
+
+	!open(35,file="hist2D.dat")!XXX
 	do i = 1, histDistBins
 		do j = 1, histCosThBins
-			hist2D(1,i,j) = histTmp(3,i+j) ! g(r,cos)
-			hist2D(2,i,j) = histTmp(4,i+j) ! frc(r,cos)
+			hist2D(1,i,j) = histTmp(3,(i-1)*histCosThBins+j) ! g(r,cos)
+			hist2D(2,i,j) = histTmp(4,(i-1)*histCosThBins+j) ! frc(r,cos)
+			!print*, '1',histTmp(3,i*histDistBins+j)!XXX
+			!print*, '2',hist2D(1,i,j)!XXX
+			!write(35,777) histDist(i), histAng(j), hist2D(1,i,j), hist2D(2,i,j) !XXX
 		enddo
 	enddo
+	!close(35)!XXX
+!777		format (4(1x,f10.6))
 
 	histDist_step_size = histDist(2) - histDist(1)
 	hHistDist_step_size = histDist_step_size / 2_dp
@@ -417,19 +424,13 @@ subroutine compute_avg_force
 							gx = 0_dp ! avoid NaNs in calc_cosTh
 						else
 							call calc_cosTh(iphiLF, ithLF)
-
-							! FIXME: bilinearly interpolate g(r, cos)
-							!call g12(gx)
 							call bilin_interpolate(1, gx) ! 1 is the index for the g(r,cos)
-							print*, "gx: ",gx
+							!print*, gx !XXX
 						endif
 
 						! if gx == 0 then don't waste time with the rest of the calculation
 						if (gx .gt. 1d-6) then
-							! FIXME: bilinearly interpolate frc(r, cos)
-							!call lin_interpolate(alp1, lin_out)
 							call bilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos)
-							print*, "fx: ",fx
 
 							!			'gx' is the g(r) value taken from a histogram of g(r,cosTh)
 							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
@@ -445,7 +446,7 @@ subroutine compute_avg_force
 		enddo !x
 		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and fx arrays
 
-		! NOTE : After the fact multiply all elements by 2*pi*density*/4/pi (4pi steradians from orientations)
+		! NOTE : After the fact multiply all elements by 2*pi*density/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
 		fAvg(r) = fAvg(r)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cfgCosTh_step_size
 	enddo !r
@@ -468,7 +469,7 @@ subroutine calc_cosTh(iphiLF, ithLF)
 
 	! calculate cos(theta1) and cos(theta2) relative to lj-spheres 1 and 2.
 	cosTh1 = dot_product(rSolv1, p) / rSolv1n
-	!cosTh2 = dot_product(rSolv2, p) / rSolv2n ! fixme is this needed?
+	cosTh2 = dot_product(rSolv2, p) / rSolv2n
 
 endsubroutine calc_cosTh
 
@@ -480,8 +481,9 @@ subroutine bilin_interpolate(ihist, fP)
 	use thetaData
 	implicit none
 	integer			:: ihist, ir1, ir2, ic1, ic2
-	real(kind=dp)	:: f_index, r1, r2, c1, c2, ra, rb, rd, cd, fR1, fR2, fP
+	real(kind=dp)	:: f_index, r1, r2, c1, c2, ra, rb, fR1, fR2, fP1, fP2, fP
 
+	! bilinearly interpolate for solute 1.
 	f_index = (rSolv1n - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
 	ir1 = floor(f_index) ! get flanking r indicies
 	if (ir1 .ge. histDistBins) then
@@ -493,6 +495,11 @@ subroutine bilin_interpolate(ihist, fP)
 
 	f_index = (cosTh1 - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
 	ic1 = floor(f_index) ! get flanking cosTh indicies
+	if (ic1 .ge. histCosThBins) then
+		ic1 = histCosThBins - 1_dp ! put larger solvent cosTh values in the last bin of the histogram
+	else if (ic1 .lt. 1) then
+		ic1 = 1 ! put the more negative solvent cosTh values in the first bin of the histogram
+	endif
 	ic2 = ic1 + 1
 	c1 = histAng(ic1)
 	c2 = histAng(ic2)
@@ -502,11 +509,50 @@ subroutine bilin_interpolate(ihist, fP)
 	endif
 	ra = r2-rSolv1n
 	rb = rSolv1n-r1
-	rd = r2-r1
 
-	cd = c2-c1
-	fP = (c2-cosTh1)/cd*(ra/rd*hist2D(ihist,ir1,ic1) + rb/rd*hist2D(ihist,ir2,ic1)) + (cosTh1-c1)/cd*(ra/rd*hist2D(ihist,ir1,ic2) &
-		+ rb/rd*hist2D(ihist,ir2,ic2))
+	fP1 = (c2-cosTh1)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic1) &
+		+ rb/histDist_step_size*hist2D(ihist,ir2,ic1)) &
+		+ (cosTh1-c1)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic2) &
+		+ rb/histDist_step_size*hist2D(ihist,ir2,ic2))
+	!if (ihist .eq. 1) then !XXX
+		!print*, 'rSolv1n, rSolv2n: ',rSolv1n,rSolv2n !XXX
+		!print*, 'fP1: ',fP1 !XXX
+	!endif !XXX
+
+	! bilinearly interpolate for solute 2.
+	f_index = (rSolv2n - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
+	ir1 = floor(f_index) ! get flanking r indicies
+	if (ir1 .ge. histDistBins) then
+		ir1 = histDistBins - 1_dp ! put larger solvent positon values in the last bin of the histogram
+	endif
+	ir2 = ir1 + 1
+	r1 = histDist(ir1)
+	r2 = histDist(ir2)
+
+	f_index = (cosTh2 - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
+	ic1 = floor(f_index) ! get flanking cosTh indicies
+	ic2 = ic1 + 1
+	c1 = histAng(ic1)
+	c2 = histAng(ic2)
+
+	if (rSolv2n .gt. r2) then
+		rSolv2n = r2 ! if the solvent was far away enough to get repositioned into the last bin, set the distance to the last bin
+	endif
+	ra = r2-rSolv2n
+	rb = rSolv2n-r1
+
+	fP2 = (c2-cosTh2)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic1) &
+		+ rb/histDist_step_size*hist2D(ihist,ir2,ic1)) &
+		+ (cosTh2-c1)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic2) &
+		+ rb/histDist_step_size*hist2D(ihist,ir2,ic2))
+	!if (ihist .eq. 1) then !XXX
+		!print*, 'fP2: ',fP2!XXX
+	!endif !XXX
+
+	fP = fP1 * fP2
+	!if (ihist .eq. 1) then !XXX
+		!print*, 'fP: ',fP!XXX
+	!endif !XXX
 
 endsubroutine bilin_interpolate
 
