@@ -319,24 +319,30 @@ subroutine make_hist_table(histFile)
 		histAng(i) = histTmp(2,i)
 	enddo
 
-	!open(35,file="hist2D.dat")!XXX
 	do i = 1, histDistBins
 		do j = 1, histCosThBins
 			hist2D(1,i,j) = histTmp(3,(i-1)*histCosThBins+j) ! g(r,cos)
 			hist2D(2,i,j) = histTmp(4,(i-1)*histCosThBins+j) ! frc(r,cos)
-			!print*, '1',histTmp(3,i*histDistBins+j)!XXX
-			!print*, '2',hist2D(1,i,j)!XXX
-			!write(35,777) histDist(i), histAng(j), hist2D(1,i,j), hist2D(2,i,j) !XXX
 		enddo
 	enddo
-	!close(35)!XXX
-!777		format (4(1x,f10.6))
 
 	histDist_step_size = histDist(2) - histDist(1)
 	hHistDist_step_size = histDist_step_size / 2_dp
 	write(*,*) "Histogram Distance Step Size: ", histDist_step_size
 	histCosTh_step_size = histAng(2) - histAng(1)
 	write(*,*) "Histogram Angle Step Size: ", histCosTh_step_size
+
+
+	!XXX: write the original hist out from variables to ensure nothing went wrong in copying it
+	open(35,file="original_hist.dat")
+	do i = 1, histDistBins
+		do j = 1, histCosThBins
+			write(35,777) histDist(i), histAng(j), hist2D(1,i,j), hist2D(2,i,j)
+		enddo
+	enddo
+	close(35)
+
+777		format (4(1x,f10.6)) !XXX
 
 endsubroutine make_hist_table
 
@@ -348,7 +354,7 @@ subroutine compute_avg_force
 	use ctrlData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: gx, fx, pi, phiLF, phi_max, phi_min
+	real(kind=dp)	:: pi, phiLF, phi_max, phi_min, gx, fx
 
 	pi = 3.1415926535_dp
 
@@ -366,7 +372,7 @@ subroutine compute_avg_force
 	x_axis = 0_dp
 	z_axis = 0_dp
 
-	! allocate arrays for testing arrays
+	! allocate arrays for control arrays
 	allocate( frcSPA(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
 
 	! Distance Axes
@@ -400,7 +406,7 @@ subroutine compute_avg_force
 	enddo
 	write(*,*) "Phi Step Size: ", phi_step_size
 
-	! Calculate the average force integral for top half of cylinder
+	! Calculate the average force integral for top half of bisecting plane of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
 		frcSPA = 0_dp
 		grSPA = 0_dp
@@ -419,24 +425,20 @@ subroutine compute_avg_force
 				! loop through orientations of solvent at x(i) and z(j)
 				do ithLF = 1, cfgCosTh_bins
 					do iphiLF = 1, cfgPhiBins
-
 						if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
 							gx = 0_dp ! avoid NaNs in calc_cosTh
 						else
 							call calc_cosTh(iphiLF, ithLF)
 							call bilin_interpolate(1, gx) ! 1 is the index for the g(r,cos)
-							!print*, gx !XXX
 						endif
 
 						! if gx == 0 then don't waste time with the rest of the calculation
 						if (gx .gt. 1d-6) then
 							call bilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos)
-
-							!			'gx' is the g(r) value taken from a histogram of g(r,cosTh)
-							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
-							!			need cos(theta) and z and we should have the integral.
-
-							fAvg(r) = fAvg(r) + ( gx * (-1) * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+							!		'gx' is the g(r) value taken from a histogram of g(r,cosTh)
+							! 		'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
+							!		need cos(theta) and z and we should have the integral.
+							fAvg(r) = fAvg(r) - ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
 							frcSPA(i,j) = frcSPA(i,j) + fx
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
@@ -480,79 +482,49 @@ subroutine bilin_interpolate(ihist, fP)
 	use histData
 	use thetaData
 	implicit none
-	integer			:: ihist, ir1, ir2, ic1, ic2
-	real(kind=dp)	:: f_index, r1, r2, c1, c2, ra, rb, fR1, fR2, fP1, fP2, fP
+	integer			:: i, ihist, ir1, ir2, ic1, ic2
+	real(kind=dp)	:: rSolv(2), cosTh(2), f_index, r1, r2, c1, c2, ra, rb, fP
 
-	! bilinearly interpolate for solute 1.
-	f_index = (rSolv1n - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
-	ir1 = floor(f_index) ! get flanking r indicies
-	if (ir1 .ge. histDistBins) then
-		ir1 = histDistBins - 1_dp ! put larger solvent positon values in the last bin of the histogram
-	endif
-	ir2 = ir1 + 1
-	r1 = histDist(ir1)
-	r2 = histDist(ir2)
+	rSolv(1) = rSolv1n
+	rSolv(2) = rSolv2n
+	cosTh(1) = cosTh1
+	cosTh(2) = cosTh2
+	fP = 1_dp
+	do i = 1, 2
+		f_index = (rSolv(i) - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
+		ir1 = floor(f_index) ! get flanking r indicies
+		if (ir1 .ge. histDistBins) then
+			ir1 = histDistBins - 1 ! put larger solvent positon values in the last bin of the histogram
+		else if (ir1 .lt. 1) then
+			ir1 = 1
+		endif
+		ir2 = ir1 + 1
+		r1 = histDist(ir1)
+		r2 = histDist(ir2)
 
-	f_index = (cosTh1 - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
-	ic1 = floor(f_index) ! get flanking cosTh indicies
-	if (ic1 .ge. histCosThBins) then
-		ic1 = histCosThBins - 1_dp ! put larger solvent cosTh values in the last bin of the histogram
-	else if (ic1 .lt. 1) then
-		ic1 = 1 ! put the more negative solvent cosTh values in the first bin of the histogram
-	endif
-	ic2 = ic1 + 1
-	c1 = histAng(ic1)
-	c2 = histAng(ic2)
+		f_index = (cosTh(i) - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
+		ic1 = floor(f_index) ! get flanking cosTh indicies
+		if (ic1 .ge. histCosThBins) then
+			ic1 = histCosThBins - 1
+		else if (ic1 .lt. 1) then
+			ic1 = 1
+		endif
+		ic2 = ic1 + 1
+		c1 = histAng(ic1)
+		c2 = histAng(ic2)
 
-	if (rSolv1n .gt. r2) then
-		rSolv1n = r2 ! if the solvent was far away enough to get repositioned into the last bin, set the distance to the last bin
-	endif
-	ra = r2-rSolv1n
-	rb = rSolv1n-r1
+		if (rSolv(i) .gt. r2) then
+			rSolv(i) = r2 ! if the solvent was far away enough to get repositioned to the last bin, set the distance to the last bin
+		endif
+		ra = r2 - rSolv(i)
+		rb = rSolv(i) - r1
 
-	fP1 = (c2-cosTh1)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic1) &
-		+ rb/histDist_step_size*hist2D(ihist,ir2,ic1)) &
-		+ (cosTh1-c1)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic2) &
-		+ rb/histDist_step_size*hist2D(ihist,ir2,ic2))
-	!if (ihist .eq. 1) then !XXX
-		!print*, 'rSolv1n, rSolv2n: ',rSolv1n,rSolv2n !XXX
-		!print*, 'fP1: ',fP1 !XXX
-	!endif !XXX
-
-	! bilinearly interpolate for solute 2.
-	f_index = (rSolv2n - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
-	ir1 = floor(f_index) ! get flanking r indicies
-	if (ir1 .ge. histDistBins) then
-		ir1 = histDistBins - 1_dp ! put larger solvent positon values in the last bin of the histogram
-	endif
-	ir2 = ir1 + 1
-	r1 = histDist(ir1)
-	r2 = histDist(ir2)
-
-	f_index = (cosTh2 - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
-	ic1 = floor(f_index) ! get flanking cosTh indicies
-	ic2 = ic1 + 1
-	c1 = histAng(ic1)
-	c2 = histAng(ic2)
-
-	if (rSolv2n .gt. r2) then
-		rSolv2n = r2 ! if the solvent was far away enough to get repositioned into the last bin, set the distance to the last bin
-	endif
-	ra = r2-rSolv2n
-	rb = rSolv2n-r1
-
-	fP2 = (c2-cosTh2)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic1) &
-		+ rb/histDist_step_size*hist2D(ihist,ir2,ic1)) &
-		+ (cosTh2-c1)/histCosTh_step_size*(ra/histDist_step_size*hist2D(ihist,ir1,ic2) &
-		+ rb/histDist_step_size*hist2D(ihist,ir2,ic2))
-	!if (ihist .eq. 1) then !XXX
-		!print*, 'fP2: ',fP2!XXX
-	!endif !XXX
-
-	fP = fP1 * fP2
-	!if (ihist .eq. 1) then !XXX
-		!print*, 'fP: ',fP!XXX
-	!endif !XXX
+		fP = fP * ( &
+			+ (c2-cosTh(i)) / (c2 - c1) * (ra / (r2 - r1) * hist2D(ihist,ir1,ic1) &
+			+ rb / (r2 - r1) * hist2D(ihist,ir2,ic1)) &
+			+ (cosTh(i)-c1) / (c2 - c1) * (ra / (r2 - r1) * hist2D(ihist,ir1,ic2) &
+			+ rb / (r2 - r1) * hist2D(ihist,ir2,ic2)) )
+	enddo
 
 endsubroutine bilin_interpolate
 
@@ -593,7 +565,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 
 	norm_const = 1_dp / real(cfgCosTh_bins, dp) / real(cfgPhiBins, dp)
 
-	open(35,file=filename)
+	open(35,file=filename,status='replace')
 	write(6,*) "Writing test file:	", filename
 	write(35,*) "# 1.	X Distance"
 	write(35,*) "# 2.	Z Distance"
@@ -606,7 +578,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	enddo
 	close(35)
 	
-898		format (4(1x,f16.12))
+898		format (4(1x,es14.7))
 
 endsubroutine write_test_out
 
@@ -618,7 +590,7 @@ subroutine write_output(outFile)
 	character(len=64) 	:: outFile
 	integer 			:: r
 
-	open(35,file=outFile)
+	open(35,file=outFile,status='replace')
 	write(6,*) "Writing output file:	", outFile
 	write(35,*) "# 1.	R Distance"
 	write(35,*) "# 2.	Avg Force"
@@ -628,7 +600,7 @@ subroutine write_output(outFile)
 	enddo
 	close(35)
 
-899		format (3(1x,f16.12))
-!899		format (3(1x,e16.12)) ! scientific format
+!899		format (3(1x,f16.12))
+899		format (3(1x,es14.7)) ! scientific format
 
 endsubroutine write_output
