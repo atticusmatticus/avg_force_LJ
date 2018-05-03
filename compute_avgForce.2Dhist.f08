@@ -392,6 +392,7 @@ subroutine compute_avg_force
 
 	if (explicit_R .eqv. .true.) then
 		num_R_bins = crdLines
+		write(*,*) "Number of R Bins: ", num_R_bins
 	else if (explicit_R .eqv. .false.) then
 		num_R_bins = int( (R_max - R_min)/R_step_size )
 		write(*,*) "Number of R Bins: ", num_R_bins
