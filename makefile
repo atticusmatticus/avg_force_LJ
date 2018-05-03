@@ -10,6 +10,9 @@ sphere: compute_avgForce.1D.sphere.f08 stringlib.f90
 ellipse: compute_avgForce.1D.ellipse.f08 stringlib.f90
 	gfortran compute_avgForce.1D.ellipse.f08 stringlib.f90 $(flags) -o compute_avgForce.1D.ellipse.x
 
+crd: crd_list.f08 stringlib.f90
+	gfortran crd_list.f08 stringlib.f90 $(flags) -o crd_list.x
+
 test: test.f08
 	gfortran test.f08 $(flags) -o test.x
 
