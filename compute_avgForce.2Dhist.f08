@@ -36,6 +36,7 @@ module cfgData
 	real(kind=dp), allocatable	:: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
 	real(kind=dp)				:: R_step_size, xz_step_size, R_min, R_max, xz_range, cosTh_max, cosTh_min, cfgCosTh_step_size, &
 		phi_step_size
+	character(len=8)			:: c_explicit_R
 	integer						:: num_R_bins, cfgCosTh_bins, cfgPhiBins
 
 endmodule cfgData
@@ -51,7 +52,9 @@ endmodule thetaData
 ! testing arrays for force and g(r)
 module ctrlData
 	use prec
-	real(kind=dp), allocatable :: frcSPA(:,:), grSPA(:,:)
+	real(kind=dp), allocatable	:: frcSPA(:,:), grSPA(:,:), explicitDist(:)
+	integer						:: crdLines
+	logical						:: explicit_R
 
 endmodule ctrlData
 
@@ -76,6 +79,9 @@ program compute_avgForce
 
 	! make list of average direct force from 'collapsed' file.
 	call make_hist_table(histFile)
+
+	! read in LJ--LJ dist array from file
+	call R_list
 
 	! compute average force integral.
 	call compute_avg_force
@@ -154,11 +160,13 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=128) 	:: line
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
-	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, phiBinsFlag, thetaBinsFlag
+	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, phiBinsFlag, thetaBinsFlag,&
+		c_explicit_RFlag
 
 	outFileFlag = .false.
 	RstepSizeFlag = .false.
 	xzStepSizeFlag = .false.
+	c_explicit_RFlag = .false.
 	RmaxFlag = .false.
 	RminFlag = .false.
 	xzRangeFlag = .false.
@@ -184,6 +192,10 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) xz_step_size
 				write(*,*) "Solvent Grid Step Size:	", xz_step_size
 				xzStepSizeFlag = .true.
+			else if (firstWord .eq. "explicit_R") then
+				read(line,*) c_explicit_R
+				write(*,*) "Use Explicit R Values:		", c_explicit_R
+				c_explicit_RFlag = .true.
 			else if (firstWord .eq. "R_max") then
 				read(line,*) R_max
 				write(*,*) "R Maximum Value:	", R_max
@@ -221,6 +233,10 @@ subroutine read_cfg(cfgFile, outFile)
 		write(*,*) "Config file must have a 'out_file' value"
 		stop
 	endif
+	if (c_explicit_RFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'explicit_R' value"
+		stop
+	endif
 	if (RmaxFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'R_max' value"
 		stop
@@ -256,8 +272,7 @@ subroutine make_hist_table(histFile)
 	real(kind=dp), allocatable	:: histTmp(:,:)
 
 	! read number of lines in histFile and allocate that many points in temporary histogram list.
-	ios = 0
-	nHistLines = 0
+	ios = 0; nHistLines = -1
 	open(20,file=histFile)
 	do while(ios>=0)
 		read(20,'(a)',IOSTAT=ios) line
@@ -266,12 +281,6 @@ subroutine make_hist_table(histFile)
 		endif
 	enddo
 	close(20)
-
-!	histDistBins = int(dble(numHistLines) / dble(histCosThBins))
-!	print*, "Number of distance bins in hist table: should be 250!!: ", histDistBins
-	! XXX: I wonder if i could read in each r value from the hist table and see if it's within .000001 of the previous value read
-	! in. If so then ignore it, if not then add it to array and increment histDistBins variable. This would be a good way for
-	! getting the histDistBins and histCosThBins from the table itself rather than the config file or hard coding.
 
 	allocate( histTmp(4,nHistLines) )
 
@@ -332,19 +341,42 @@ subroutine make_hist_table(histFile)
 	histCosTh_step_size = histAng(2) - histAng(1)
 	write(*,*) "Histogram Angle Step Size: ", histCosTh_step_size
 
-
-	!XXX: write the original hist out from variables to ensure nothing went wrong in copying it
-	open(35,file="original_hist.dat")
-	do i = 1, histDistBins
-		do j = 1, histCosThBins
-			write(35,777) histDist(i), histAng(j), hist2D(1,i,j), hist2D(2,i,j)
-		enddo
-	enddo
-	close(35)
-
-777		format (4(1x,f10.6)) !XXX
-
 endsubroutine make_hist_table
+
+
+! read LJ--LJ displacements from file
+subroutine R_list
+	use cfgData
+	use ctrlData
+	implicit none
+	integer				:: ios, i
+	character(len=16)	:: junk
+	character(len=64)	:: line
+
+	if (c_explicit_R .eq. 'no') then
+		explicit_R = .false.
+	else if (c_explicit_R .eq. 'yes') then
+		explicit_R = .true.
+
+		ios = 0; crdLines = -1
+		open(20,file='crd_list.out',status='old')
+		do while(ios>=0)
+			read(20,'(a)',IOSTAT=ios) line
+			crdLines = crdLines + 1
+		enddo
+		close(20)
+
+		allocate( explicitDist(crdLines) )
+
+		ios = 0
+		open(20,file='crd_list.out',status='old')
+		do i = 1, crdLines
+			read(20,*,iostat=ios) junk, explicitDist(i)
+		enddo
+		close(20)
+	endif
+
+endsubroutine R_list
 
 
 ! do the average force integral
@@ -358,8 +390,12 @@ subroutine compute_avg_force
 
 	pi = 3.1415926535_dp
 
-	num_R_bins = int( (R_max - R_min)/R_step_size )
-	write(*,*) "Number of R Bins: ", num_R_bins
+	if (explicit_R .eqv. .true.) then
+		num_R_bins = crdLines
+	else if (explicit_R .eqv. .false.) then
+		num_R_bins = int( (R_max - R_min)/R_step_size )
+		write(*,*) "Number of R Bins: ", num_R_bins
+	endif
 	num_x_bins = int( (2_dp * xz_range)/xz_step_size )
 	write(*,*) "Number of X Bins: ", num_x_bins
 	num_z_bins = int( (xz_range)/xz_step_size )
@@ -367,17 +403,21 @@ subroutine compute_avg_force
 
 	! allocate array sizes for axes and average force
 	allocate( R_axis(num_R_bins), fAvg(num_R_bins), x_axis(num_x_bins), z_axis(num_z_bins) )
-	R_axis = 0_dp
-	fAvg = 0_dp
-	x_axis = 0_dp
-	z_axis = 0_dp
+	R_axis = 0_dp; fAvg = 0_dp; x_axis = 0_dp; z_axis = 0_dp
 
 	! allocate arrays for control arrays
 	allocate( frcSPA(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
 
 	! Distance Axes
 	do r = 1, num_R_bins
-		R_axis(r) = (r-1) * R_step_size + R_min
+		if (explicit_R .eqv. .true.) then
+			R_axis(r) = explicitDist(r)
+		else if (explicit_r .eqv. .false.) then
+			R_axis(r) = (r-1) * R_step_size + R_min
+		endif
+	enddo
+	do r = 1, crdLines
+		R_axis(r) = explicitDist(r)
 	enddo
 	do i = 1, num_x_bins
 		x_axis(i) = (i-1) * xz_step_size - xz_range
@@ -408,8 +448,7 @@ subroutine compute_avg_force
 
 	! Calculate the average force integral for top half of bisecting plane of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
-		frcSPA = 0_dp
-		grSPA = 0_dp
+		frcSPA = 0_dp; grSPA = 0_dp
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
 				rSolv1(1) = x_axis(i)-R_axis(r)/2_dp
@@ -550,17 +589,17 @@ endsubroutine integrate_force
 
 
 ! write force out and g(r) out to compare against explicit
-subroutine write_test_out(r, num_x_bins, num_z_bins)
+subroutine write_test_out(i_f, num_x_bins, num_z_bins)
 	use cfgData
 	use ctrlData
 	implicit none
-	integer				:: r, i, j, num_x_bins, num_z_bins
+	integer				:: i_f, i, j, num_x_bins, num_z_bins
 	real(kind=dp)		:: norm_const
 	character(len=32)	:: temp, filename
 	character(len=8)	:: frmt
 
 	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
-	write(temp,frmt) r ! converting integer to string using 'internal file'
+	write(temp,frmt) i_f ! converting integer to string using 'internal file'
 	filename='hist2D_output.'//trim(temp)//'.dat'
 
 	norm_const = 1_dp / real(cfgCosTh_bins, dp) / real(cfgPhiBins, dp)
@@ -600,7 +639,6 @@ subroutine write_output(outFile)
 	enddo
 	close(35)
 
-!899		format (3(1x,f16.12))
 899		format (3(1x,es14.7)) ! scientific format
 
 endsubroutine write_output
