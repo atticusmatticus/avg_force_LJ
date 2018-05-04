@@ -1,4 +1,4 @@
-! USAGE: ./this_file.x -first [first file number] -last [last file number] -out [out file]
+! USAGE: ./this_file.x -first [first file number] -last [last file number] -step [step size] -out [out file]
 !
 ! create list of LJ--LJ displacements from explicit .crd files
 
