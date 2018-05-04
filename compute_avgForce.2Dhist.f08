@@ -522,7 +522,7 @@ subroutine bilin_interpolate(ihist, fP)
 	use histData
 	use thetaData
 	implicit none
-	integer			:: i, ihist, ir1, ir2, ic1, ic2
+	integer			:: i, iloop, ihist, ir1, ir2, ic1, ic2
 	real(kind=dp)	:: rSolv(2), cosTh(2), f_index, r1, r2, c1, c2, ra, rb, fP
 
 	rSolv(1) = rSolv1n
@@ -530,7 +530,12 @@ subroutine bilin_interpolate(ihist, fP)
 	cosTh(1) = cosTh1
 	cosTh(2) = cosTh2
 	fP = 1_dp
-	do i = 1, 2
+	if (ihist .eq. 1) then
+		iloop = 2
+	else if (ihist .eq. 2) then
+		iloop = 1
+	endif
+	do i = 1, iloop
 		f_index = (rSolv(i) - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
 		ir1 = floor(f_index) ! get flanking r indicies
 		if (ir1 .ge. histDistBins) then
