@@ -9,7 +9,7 @@
 !						| /y
 !						|/
 !		<_______O_______|_______O_______>
-!		-x		2				1	+x
+!		-x		1				2	+x
 !
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -386,7 +386,7 @@ subroutine compute_avg_force
 	use ctrlData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: pi, phiLF, phi_max, phi_min, gx, fx
+	real(kind=dp)	:: pi, phiLF, phi_max, phi_min, gx, fx, fNew
 
 	pi = 3.1415926535_dp
 
@@ -452,12 +452,12 @@ subroutine compute_avg_force
 		frcSPA = 0_dp; grSPA = 0_dp
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
-				rSolv1(1) = x_axis(i)-R_axis(r)/2_dp
+				rSolv1(1) = x_axis(i)+R_axis(r)/2_dp
 				rSolv1(2) = 0_dp
 				rSolv1(3) = z_axis(j)
 				rSolv1n = norm2(rSolv1)
 
-				rSolv2(1) = x_axis(i)+R_axis(r)/2_dp
+				rSolv2(1) = x_axis(i)-R_axis(r)/2_dp
 				rSolv2(2) = 0_dp
 				rSolv2(3) = z_axis(j)
 				rSolv2n = norm2(rSolv2)
@@ -478,14 +478,22 @@ subroutine compute_avg_force
 							!		'gx' is the g(r) value taken from a histogram of g(r,cosTh)
 							! 		'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
 							!		need cos(theta) and z and we should have the integral.
-							fAvg(r) = fAvg(r) - ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							frcSPA(i,j) = frcSPA(i,j) + fx
+							fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+							fAvg(r) = fAvg(r) + fNew
+							frcSPA(i,j) = frcSPA(i,j) + fNew
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
 					enddo !phi
 				enddo !theta
 			enddo !z
 		enddo !x
+		do i = 1, num_x_bins
+			do j = 1, num_z_bins
+				!frcSPA(i,j) = frcSPA(i,j) / 2_dp / pi / z_axis(j) ! get rid of jacobian that puts force field to 0 at z=0
+				! normalize
+				frcSPA(i,j) = frcSPA(i,j)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cfgCosTh_step_size
+			enddo !z again
+		enddo !x again
 		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and fx arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density/4/pi (4pi steradians from orientations)
@@ -608,7 +616,6 @@ subroutine write_test_out(i_f, num_x_bins, num_z_bins)
 	write(temp,frmt) i_f ! converting integer to string using 'internal file'
 	filename='hist2D_output.'//trim(temp)//'.dat'
 
-	norm_const = 1_dp / real(cfgCosTh_bins, dp) / real(cfgPhiBins, dp)
 
 	open(35,file=filename,status='replace')
 	write(6,*) "Writing test file:	", filename
@@ -618,7 +625,7 @@ subroutine write_test_out(i_f, num_x_bins, num_z_bins)
 	write(35,*) "# 4.	g(r) List"
 	do i = 1, num_x_bins
 		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), frcSPA(i,j)*norm_const, grSPA(i,j)*norm_const
+			write(35,898) x_axis(i), z_axis(j), frcSPA(i,j), grSPA(i,j)
 		enddo
 	enddo
 	close(35)
