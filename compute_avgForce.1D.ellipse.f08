@@ -337,7 +337,7 @@ subroutine compute_avg_force
 	use testData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: gx, lin_out, pi, phiLF, cosTh_max, cosTh_min, phi_max, phi_min
+	real(kind=dp)	:: gx, lin_out, pi, phiLF, cosTh_max, cosTh_min, phi_max, phi_min, fNew
 
 	pi = 3.1415926535_dp
 	y02 = y0*y0
@@ -401,12 +401,12 @@ subroutine compute_avg_force
 		grSPA = 0_dp
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
-				rSolv1(1) = x_axis(i)-R_axis(r)/2_dp
+				rSolv1(1) = x_axis(i)+R_axis(r)/2_dp
 				rSolv1(2) = 0_dp
 				rSolv1(3) = z_axis(j)
 				rSolv1n = norm2(rSolv1)
 
-				rSolv2(1) = x_axis(i)+R_axis(r)/2_dp
+				rSolv2(1) = x_axis(i)-R_axis(r)/2_dp
 				rSolv2(2) = 0_dp
 				rSolv2(3) = z_axis(j)
 				rSolv2n = norm2(rSolv2)
@@ -431,9 +431,9 @@ subroutine compute_avg_force
 							! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
 							! 			'lin_out' is ||fs(x,z)||, force from solvent at (x,z)
 							!			Now we need cos(theta) and z and we should have the integral.
-
-							fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							linAvg(i,j) = linAvg(i,j) + lin_out
+							fNew = ( gx * lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+							fAvg(r) = fAvg(r) + fNew
+							linAvg(i,j) = linAvg(i,j) + fNew
 							lin_outArray(i) = lin_outArray(i) + lin_out*xz_step_size
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
@@ -503,8 +503,8 @@ subroutine alpha(iphiLF, ithLF)
 	cosTh1 = dot_product(rSolv1, p) / rSolv1n
 	cosTh2 = dot_product(rSolv2, p) / rSolv2n
 
-	alp1 = dsqrt( rSolv1n**2 * (1_dp-cosTh1**2) + (rSolv1n*cosTh1 - offset)**2 / y02 )
-	alp2 = dsqrt( rSolv2n**2 * (1_dp-cosTh2**2) + (rSolv2n*cosTh2 - offset)**2 / y02 )
+	alp1 = ( rSolv1n**2 * (1_dp-cosTh1**2) + (rSolv1n*cosTh1 - offset)**2 / y02 )**0.5
+	alp2 = ( rSolv2n**2 * (1_dp-cosTh2**2) + (rSolv2n*cosTh2 - offset)**2 / y02 )**0.5
 
 endsubroutine alpha
 
