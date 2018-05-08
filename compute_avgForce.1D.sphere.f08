@@ -289,7 +289,7 @@ subroutine compute_avg_force
 	use testData
 	implicit none
 	integer 			:: num_x_bins, num_z_bins, r, i, j
-	double precision	:: gx, lin_out, pi, rSolv1n, rSolv2n, rSolv1(3), rSolv2(3)
+	double precision	:: gx, lin_out, pi, rSolv1n, rSolv2n, rSolv1(3), rSolv2(3), fNew
 
 	pi = 3.1415926535
 
@@ -329,12 +329,12 @@ subroutine compute_avg_force
 		grSPA = 0.d0
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
-				rSolv1(1) = x_axis(i)-R_axis(r)/2.0
+				rSolv1(1) = x_axis(i)+R_axis(r)/2.0
 				rSolv1(2) = 0.0
 				rSolv1(3) = z_axis(j)
 				rSolv1n = norm2(rSolv1)
 
-				rSolv2(1) = x_axis(i)+R_axis(r)/2.0
+				rSolv2(1) = x_axis(i)-R_axis(r)/2.0
 				rSolv2(2) = 0.0
 				rSolv2(3) = z_axis(j)
 				rSolv2n = norm2(rSolv2)
@@ -349,10 +349,10 @@ subroutine compute_avg_force
 					! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
 					! 			'lin_out' is ||fs(x,z)||, force from solvent at (x,z)
 					!			Now we need cos(theta) and z and we should have the integral.
-
-					fAvg(r) = fAvg(r) + ( gx * (-1)*lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-					linAvg(i,j) = linAvg(i,j) + lin_out ! fixme print one of these to file for every r
-					grSPA(i,j) = grSPA(i,j) + gx ! fixme same with gx
+					fNew = ( gx * lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+					fAvg(r) = fAvg(r) + fNew
+					linAvg(i,j) = linAvg(i,j) + fNew
+					grSPA(i,j) = grSPA(i,j) + gx
 				endif
 			enddo !z
 		enddo !x
