@@ -492,6 +492,7 @@ subroutine compute_avg_force
 				!frcSPA(i,j) = frcSPA(i,j) / 2_dp / pi / z_axis(j) ! get rid of jacobian that puts force field to 0 at z=0
 				! normalize
 				frcSPA(i,j) = frcSPA(i,j)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cfgCosTh_step_size
+				grSPA(i,j) = grSPA(i,j)/cfgPhiBins/cfgCosTh_bins
 			enddo !z again
 		enddo !x again
 		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and fx arrays
@@ -608,7 +609,6 @@ subroutine write_test_out(i_f, num_x_bins, num_z_bins)
 	use ctrlData
 	implicit none
 	integer				:: i_f, i, j, num_x_bins, num_z_bins
-	real(kind=dp)		:: norm_const
 	character(len=32)	:: temp, filename
 	character(len=8)	:: frmt
 
