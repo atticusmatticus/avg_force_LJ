@@ -369,10 +369,10 @@ subroutine compute_avg_force
 		R_axis(r) = (r-1) * R_step_size + R_min
 	enddo
 	do i = 1, num_x_bins
-		x_axis(i) = (i-1) * xz_step_size - xz_range
+		x_axis(i) = (i-1) * xz_step_size - xz_range + xz_step_size/2_dp
 	enddo
 	do j = 1, num_z_bins
-		z_axis(j) = (j-1) * xz_step_size
+		z_axis(j) = (j-1) * xz_step_size + xz_step_size/2_dp
 	enddo
 
 	! Angles
