@@ -491,7 +491,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(35,*) "# 4.	g(r) List"
 	do i = 1, num_x_bins
 		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), frcSPA(i,j), grSPA(i,j)
+			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
 		enddo
 	enddo
 	close(35)
