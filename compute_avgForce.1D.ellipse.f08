@@ -593,8 +593,8 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(6,*) "Writing test file:	", filename
 	write(35,*) "# 1.	X Distance"
 	write(35,*) "# 2.	Z Distance"
-	write(35,*) "# 3.	Avg Force List"
-	write(35,*) "# 4.	g(r) List"
+	write(35,*) "# 3.	g(r)"
+	write(35,*) "# 4.	Force"
 	do i = 1, num_x_bins
 		do j = 1, num_z_bins
 			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
