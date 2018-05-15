@@ -25,7 +25,7 @@ endmodule cfgData
 
 ! testing arrays for force and g(r)
 module testData
-	double precision, allocatable :: linAvg(:,:), grSPA(:,:)
+	double precision, allocatable :: frcSPA(:,:), grSPA(:,:)
 
 endmodule testData
 
@@ -289,7 +289,7 @@ subroutine compute_avg_force
 	use testData
 	implicit none
 	integer 			:: num_x_bins, num_z_bins, r, i, j
-	double precision	:: gx, lin_out, pi, rSolv1n, rSolv2n, rSolv1(3), rSolv2(3), fNew
+	double precision	:: gx, fx, pi, rSolv1n, rSolv2n, rSolv1(3), rSolv2(3), fNew
 
 	pi = 3.1415926535
 
@@ -308,9 +308,8 @@ subroutine compute_avg_force
 	z_axis = 0.d0
 
 	! allocate arrays for testing arrays
-	allocate( linAvg(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
-	linAvg = 0.d0
-	grSPA = 0.d0
+	allocate( frcSPA(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
+	frcSPA = 0.d0; grSPA = 0.d0
 
 	! Distance Axes
 	do r = 1, num_R_bins
@@ -325,8 +324,7 @@ subroutine compute_avg_force
 
 	! Calculate the average force integral for top half of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
-		linAvg = 0.d0
-		grSPA = 0.d0
+		frcSPA = 0.d0; grSPA = 0.d0
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
 				rSolv1(1) = x_axis(i)+R_axis(r)/2.0
@@ -344,19 +342,25 @@ subroutine compute_avg_force
 
 				! if gx == 0 then don't waste time with the rest of the calculation
 				if (gx .gt. 1d-6) then
-					call lin_interpolate(rSolv1n, lin_out)
+					call lin_interpolate(rSolv1n, fx)
 
 					! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
-					! 			'lin_out' is ||fs(x,z)||, force from solvent at (x,z)
+					! 			'fx' is ||fs(x,z)||, force from solvent at (x,z)
 					!			Now we need cos(theta) and z and we should have the integral.
-					fNew = ( gx * lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+					fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
 					fAvg(r) = fAvg(r) + fNew
-					linAvg(i,j) = linAvg(i,j) + fNew
+					frcSPA(i,j) = frcSPA(i,j) + fNew
 					grSPA(i,j) = grSPA(i,j) + gx
 				endif
 			enddo !z
 		enddo !x
-		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and lin_out arrays
+		do i = 1, num_x_bins
+			do j = 1, num_z_bins
+				! normalize
+				frcSPA(i,j) = frcSPA(i,j)/2.d0*0.00750924d0*xz_step_size*xz_step_size
+			enddo !z again
+		enddo !x again
+		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and frcSPA arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*r**2
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
@@ -401,23 +405,23 @@ endfunction parabola
 
 
 ! linearly interpolate between force at 'a' and 'b' to give 'output' force.
-subroutine lin_interpolate(alp, lin_out)
+subroutine lin_interpolate(alp, fx)
 	use frcData
 	implicit none
 	integer 			:: i1, i2	! the left and right flanking indices
-	double precision 	:: float_index, alp, lin_out
+	double precision 	:: float_index, alp, fx
 
-	float_index = alp / fDist_step_size + 0.5 ! fixme forces come from half bin position. print lin_out(alp) compare to MD sim.
+	float_index = alp / fDist_step_size + 0.5 ! fixme forces come from half bin position. print fx(alp) compare to MD sim.
 	i1 = floor(float_index)
 	i2 = i1 + 1
 
 	if (i2 .ge. numFrcLines) then
-		lin_out = 0
+		fx = 0
 	else
-		lin_out = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
+		fx = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
 	endif
 
-	!write(*,*) 'alp: ', alp, '   lin_out: ', lin_out
+	!write(*,*) 'alp: ', alp, '   fx: ', fx
 endsubroutine lin_interpolate
 
 
@@ -487,7 +491,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(35,*) "# 4.	g(r) List"
 	do i = 1, num_x_bins
 		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), linAvg(i,j), grSPA(i,j)
+			write(35,898) x_axis(i), z_axis(j), frcSPA(i,j), grSPA(i,j)
 		enddo
 	enddo
 	close(35)
