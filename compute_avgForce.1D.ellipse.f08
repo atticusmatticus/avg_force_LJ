@@ -44,7 +44,7 @@ endmodule alphaData
 ! testing arrays for force and g(r)
 module testData
 	use prec
-	real(kind=dp), allocatable :: linAvg(:,:), grSPA(:,:), lin_outArray(:)
+	real(kind=dp), allocatable :: frcSPA(:,:), grSPA(:,:)
 
 endmodule testData
 
@@ -337,7 +337,7 @@ subroutine compute_avg_force
 	use testData
 	implicit none
 	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: gx, lin_out, pi, phiLF, cosTh_max, cosTh_min, phi_max, phi_min, fNew
+	real(kind=dp)	:: gx, fx, pi, phiLF, cosTh_max, cosTh_min, phi_max, phi_min, fNew
 
 	pi = 3.1415926535_dp
 	y02 = y0*y0
@@ -353,16 +353,11 @@ subroutine compute_avg_force
 
 	! allocate array sizes for axes and average force
 	allocate( R_axis(num_R_bins), fAvg(num_R_bins), x_axis(num_x_bins), z_axis(num_z_bins) )
-	R_axis = 0_dp
-	fAvg = 0_dp
-	x_axis = 0_dp
-	z_axis = 0_dp
+	R_axis = 0_dp; fAvg = 0_dp; x_axis = 0_dp; z_axis = 0_dp
 
 	! allocate arrays for testing arrays
-	allocate( linAvg(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins), lin_outArray(num_x_bins) )
-	lin_outArray = 0_dp
-	linAvg = 0_dp
-	grSPA = 0_dp
+	allocate( frcSPA(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
+	frcSPA = 0_dp; grSPA = 0_dp
 
 	! Distance Axes
 	do r = 1, num_R_bins
@@ -397,8 +392,7 @@ subroutine compute_avg_force
 
 	! Calculate the average force integral for top half of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
-		linAvg = 0_dp
-		grSPA = 0_dp
+		frcSPA = 0_dp; grSPA = 0_dp
 		do i = 1, num_x_bins ! full length of cylinder
 			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
 				rSolv1(1) = x_axis(i)+R_axis(r)/2_dp
@@ -426,22 +420,28 @@ subroutine compute_avg_force
 
 						! if gx == 0 then don't waste time with the rest of the calculation
 						if (gx .gt. 1d-6) then
-							call lin_interpolate(alp1, lin_out)
+							call lin_interpolate(alp1, fx)
 
 							! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
-							! 			'lin_out' is ||fs(x,z)||, force from solvent at (x,z)
+							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z)
 							!			Now we need cos(theta) and z and we should have the integral.
-							fNew = ( gx * lin_out * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
+							fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
 							fAvg(r) = fAvg(r) + fNew
-							linAvg(i,j) = linAvg(i,j) + fNew
-							lin_outArray(i) = lin_outArray(i) + lin_out*xz_step_size
+							frcSPA(i,j) = frcSPA(i,j) + fNew
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
 					enddo !phi
 				enddo !theta
 			enddo !z
 		enddo !x
-		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and lin_out arrays
+		do i = 1, num_x_bins
+			do j = 1, num_z_bins
+				! normalize
+				frcSPA(i,j) = frcSPA(i,j)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cosTheta_step_size
+				grSPA(i,j) = grSPA(i,j)/phi_bins/theta_bins
+			enddo !z again
+		enddo !x again
+		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and frcSPA arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
@@ -510,23 +510,23 @@ endsubroutine alpha
 
 
 ! linearly interpolate between force at 'a' and 'b' to give 'output' force.
-subroutine lin_interpolate(alp, lin_out)
+subroutine lin_interpolate(alp, fx)
 	use frcData
 	implicit none
 	integer 		:: i1, i2	! the left and right flanking indices
-	real(kind=dp) 	:: float_index, alp, lin_out
+	real(kind=dp) 	:: float_index, alp, fx
 
-	float_index = alp / fDist_step_size + 0.5 ! forces come from half bin position. print lin_out(alp) compare to MD sim.
+	float_index = alp / fDist_step_size + 0.5 ! forces come from half bin position. print fx(alp) compare to MD sim.
 	i1 = floor(float_index)
 	i2 = i1 + 1
 
 	if (i2 .ge. numFrcLines) then
-		lin_out = 0_dp
+		fx = 0_dp
 	else
-		lin_out = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
+		fx = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
 	endif
 
-	!write(*,*) 'alp: ', alp, '   lin_out: ', lin_out
+	!write(*,*) 'alp: ', alp, '   fx: ', fx
 endsubroutine lin_interpolate
 
 
@@ -589,8 +589,6 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(temp,frmt) r ! converting integer to string using 'internal file'
 	filename='ellipse_output.'//trim(temp)//'.dat'
 
-	norm_const = 1_dp / real(theta_bins, dp) / real(phi_bins, dp)
-
 	open(35,file=filename)
 	write(6,*) "Writing test file:	", filename
 	write(35,*) "# 1.	X Distance"
@@ -599,7 +597,7 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(35,*) "# 4.	g(r) List"
 	do i = 1, num_x_bins
 		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), linAvg(i,j)*norm_const, grSPA(i,j)*norm_const
+			write(35,898) x_axis(i), z_axis(j), frcSPA(i,j), grSPA(i,j)
 		enddo
 	enddo
 	close(35)
