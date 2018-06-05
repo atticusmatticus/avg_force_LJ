@@ -96,6 +96,8 @@ program compute_avgForce
 	tf = omp_get_wtime()
 	write(*,*) "Total time elapsed: ", tf-ti, "seconds"
 
+	flush(6)
+
 endprogram compute_avgForce
 
 
@@ -148,6 +150,8 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
 		write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
 		stop
 	endif
+
+	flush(6)
 
 endsubroutine parse_command_line
 
@@ -258,6 +262,8 @@ subroutine read_cfg(cfgFile, outFile)
 		stop
 	endif
 
+	flush(6)
+
 endsubroutine read_cfg
 
 
@@ -340,6 +346,8 @@ subroutine make_hist_table(histFile)
 	write(*,*) "Histogram Distance Step Size: ", histDist_step_size
 	histCosTh_step_size = histAng(2) - histAng(1)
 	write(*,*) "Histogram Angle Step Size: ", histCosTh_step_size
+
+	flush(6)
 
 endsubroutine make_hist_table
 
@@ -446,6 +454,8 @@ subroutine compute_avg_force
 		cosPhiLF(iphiLF) = dcos(phiLF)
 	enddo
 	write(*,*) "Phi Step Size: ", phi_step_size
+
+	flush(6)
 
 	! Calculate the average force integral for top half of bisecting plane of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
@@ -629,6 +639,8 @@ subroutine write_test_out(i_f, num_x_bins, num_z_bins)
 		enddo
 	enddo
 	close(35)
+
+	flush(6)
 	
 898		format (4(1x,es14.7))
 
@@ -651,6 +663,8 @@ subroutine write_output(outFile)
 		write(35,899) R_axis(r), fAvg(r), u_dir(r)
 	enddo
 	close(35)
+
+	flush(6)
 
 899		format (3(1x,es14.7)) ! scientific format
 
