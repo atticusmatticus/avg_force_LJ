@@ -63,6 +63,8 @@ program compute_avgForce
 	tf = omp_get_wtime()
 	write(*,*) "Total time elapsed: ", tf-ti, "seconds"
 
+	flush(6)
+
 endprogram compute_avgForce
 
 
@@ -115,6 +117,8 @@ subroutine parse_command_line(frcFile, cfgFile) !,outFile)
 		write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
 		stop
 	endif
+
+	flush(6)
 
 endsubroutine parse_command_line
 
@@ -234,6 +238,8 @@ subroutine read_cfg(cfgFile, outFile)
 		stop
 	endif
 
+	flush(6)
+
 endsubroutine read_cfg
 
 
@@ -321,6 +327,8 @@ subroutine compute_avg_force
 	do j = 1, num_z_bins
 		z_axis(j) = (j-1) * xz_step_size + xz_step_size/2.d0
 	enddo
+
+	flush(6)
 
 	! Calculate the average force integral for top half of cylinder
 	do r = 1, num_R_bins ! loop lj--lj distances
@@ -463,6 +471,8 @@ subroutine write_output(outFile)
 	enddo
 	close(35)
 
+	flush(6)
+
 899		format (3(1x,f16.12))
 !899		format (3(1x,e20.10)) ! scientific format
 
@@ -495,6 +505,8 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 		enddo
 	enddo
 	close(35)
+
+	flush(6)
 
 898		format (4(1x,f16.12))
 
