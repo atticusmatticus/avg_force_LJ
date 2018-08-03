@@ -29,7 +29,7 @@ end module histData
 module cfgData
 	use prec
 	real(kind=dp), allocatable	:: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
-	real(kind=dp)				:: RStepSize, xzStepSize, R_min, R_max, xz_range, cosTh_max, cosTh_min, phi_max, phi_min, &
+	real(kind=dp)				:: RStepSize, xzStepSize, R_min, R_max, xz_range, cosTh_max, cosTh_min, phi_max, phi_min, phi_hmax,&
 		cfgCosThStepSize, cfgPhiStepSize, cfgPsiStepSize
 	character(len=8)			:: c_explicit_R
 	integer						:: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins
@@ -91,6 +91,8 @@ program compute_avgForce
 	tf = omp_get_wtime()
 	write(*,*) "Total time elapsed: ", tf-ti, "seconds"
 
+	flush(6)
+
 end program compute_avgForce
 
 
@@ -143,6 +145,8 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
 		write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
 		stop
 	end if
+
+	flush(6)
 
 end subroutine parse_command_line
 
@@ -262,6 +266,8 @@ subroutine read_cfg(cfgFile, outFile)
 		stop
 	end if
 
+	flush(6)
+
 end subroutine read_cfg
 
 
@@ -289,8 +295,7 @@ subroutine make_hist_table(histFile)
 	allocate( histTmp(5,nHistLines) )
 
 	! populate hist arrays
-	ios = 0
-	i = 1
+	ios = 0; i = 1
 	open(20,file=histFile)
 	! read file ignoring comment lines at the beginning
 	do while(ios>=0)
@@ -337,10 +342,10 @@ subroutine make_hist_table(histFile)
 	
 	! populate arrays that will be used in the rest of the calculation from temp array
 	do i = 1, histDistBins		! the values written out from python script are at half-bin distances
-		histDist(i) = histTmp(1,histCosThBins*i-1)
+		histDist(i) = histTmp(1,histCosThBins*histPhiBins*(i-1)+1)
 	end do
 	do i = 1, histCosThBins
-		histCosTh(i) = histTmp(2,i)
+		histCosTh(i) = histTmp(2,histPhiBins*(i-1)+1)
 	end do
 	do i = 1, histPhiBins
 		histPhi(i) = histTmp(3,i)
@@ -361,6 +366,8 @@ subroutine make_hist_table(histFile)
 	write(*,*) "Histogram Cosine Theta Step Size: ", histCosThStepSize
 	histPhiStepSize = histPhi(2) - histPhi(1)
 	write(*,*) "Histogram Phi Step Size: ", histPhiStepSize 
+
+	flush(6)
 
 end subroutine make_hist_table
 
@@ -411,7 +418,7 @@ subroutine compute_avg_force
 
 	write(*,*) "Setting up for average force iteration..."
 	pi = 3.1415926535_dp
-	density = 0.00750924_dp
+	density = 0.00750924_dp ! numerical density of chloroforms per Angstrom**3
 
 	if (explicit_R .eqv. .true.) then
 		cfgRBins = crdLines
@@ -450,7 +457,9 @@ subroutine compute_avg_force
 		z_axis(j) = (j-1) * xzStepSize + xzStepSize/2_dp
 	end do
 
-	! Angles
+	! ANGLES
+	! Theta
+	! tilt off of z
 	allocate( cosThetaLF(cfgCosThBins), sinThetaLF(cfgCosThBins), sinPhiLF(cfgPhiBins), cosPhiLF(cfgPhiBins), &
 		sinPsiLF(cfgPsiBins), cosPsiLF(cfgPsiBins) )
 
@@ -463,7 +472,10 @@ subroutine compute_avg_force
 	end do
 	write(*,*) "Config Cos(Theta) Step Size: ", cfgCosThStepSize
 
-	phi_max = 2_dp*pi/3_dp ! FIXME: this should be sufficient for a molecule with C3 symmetry.
+	! Phi
+	! twist about z
+	phi_max = 2_dp*pi/3_dp ! note: this is sufficient for a molecule with C3 symmetry.
+	phi_hmax = pi/3_dp
 	phi_min = 0_dp
 	cfgPhiStepSize = (phi_max - phi_min) / real(cfgPhiBins, dp)
 	do iphiLF = 1, cfgPhiBins
@@ -473,6 +485,8 @@ subroutine compute_avg_force
 	end do
 	write(*,*) "Config Phi Step Size: ", cfgPhiStepSize
 
+	! Psi
+	! processison about z
 	psi_max = 2_dp*pi
 	psi_min = 0_dp
 	cfgPsiStepSize = (psi_max - psi_min) / real(cfgPsiBins, dp)
@@ -484,6 +498,9 @@ subroutine compute_avg_force
 	write(*,*) "Config Psi Step Size: ", cfgPsiStepSize
 
 	write(*,*) "Computing average force..."
+
+	flush(6)
+
 	! Calculate the average force integral for top half of bisecting plane of cylinder
 	do r = 1, cfgRBins ! loop lj--lj distances
 		frcSPA = 0_dp; grSPA = 0_dp
@@ -507,7 +524,7 @@ subroutine compute_avg_force
 								gx = 0_dp ! avoid NaNs in calc_angles
 							else
 								call calc_angles(ipsiLF, ithLF, iphiLF)
-								call trilin_interpolate(1, gx) ! 1 is the index for the g(r,cos,phi)
+								call trilin_interpolate(1, gx) ! 1 is the index for the g(r,theta,phi)
 							end if
 
 							! if gx == 0 then don't waste time with the rest of the calculation
@@ -516,8 +533,8 @@ subroutine compute_avg_force
 								!		'gx' is the g(r) value taken from a histogram of g(r,cosTh,phi)
 								! 		'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
 								!		need cos(theta) and z and we should have the integral.
-								fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-								fAvg(r) = fAvg(r) + fNew
+								fNew = ( fx * gx * ( rSolv1(1) / rSolv1n ) )
+								fAvg(r) = fAvg(r) + (fNew * z_axis(j)) ! note: added r here instead of in fNew
 								frcSPA(i,j) = frcSPA(i,j) + fNew
 								grSPA(i,j) = grSPA(i,j) + gx
 							end if
@@ -530,6 +547,7 @@ subroutine compute_avg_force
 			do j = 1, zBins
 				!frcSPA(i,j) = frcSPA(i,j) / 2_dp / pi / z_axis(j) ! get rid of jacobian that puts force field to 0 at z=0
 				! normalize
+				frcSPA(i,j) = frcSPA(i,j)/grSPA(i,j)
 				frcSPA(i,j) = frcSPA(i,j)/2_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPhiStepSize*cfgPsiStepSize
 				grSPA(i,j) = grSPA(i,j)/cfgCosThBins/cfgPhiBins/cfgPsiBins
 			end do !z again
@@ -581,9 +599,13 @@ subroutine calc_angles(ipsiLF, ithLF, iphiLF)
 
 	if (phi1 .ge. phi_max) then
 		phi1 = phi1 - phi_max
+	else if (( phi1 .gt. phi_hmax ) .and. ( phi1 .lt. phi_max )) then
+		phi1 = phi_max - phi1
 	end if
 	if (phi2 .ge. phi_max) then
 		phi2 = phi2 - phi_max
+	else if (( phi2 .gt. phi_hmax ) .and. ( phi2 .lt. phi_max )) then
+		phi2 = phi_max - phi2
 	end if
 
 end subroutine calc_angles
@@ -610,53 +632,77 @@ subroutine trilin_interpolate(ihist, fP)
 	else if (ihist .eq. 2) then ! for frc(r) only particle 1 needs to be accounted for
 		iloop = 1
 	end if
-	do i = 1, iloop
-		! Note: get the bounding values in each dimension.
+	do i = 1, iloop ! Note: get the bounding values in each dimension.
 		! r
-		f_index = (rSolv(i) - histDistStepSize) / histDistStepSize + 1.5_dp ! take into account half-bin positions
+		f_index = (rSolv(i)) / histDistStepSize + 0.5_dp ! take into account half-bin positions
 		ir0 = floor(f_index) ! get flanking r indicies
 		if (ir0 .ge. histDistBins) then
-			ir0 = histDistBins - 1 ! put larger solvent positon values in the last bin of the histogram
+			ir0 = histDistBins
+			ir1 = histDistBins
 		else if (ir0 .lt. 1) then
 			ir0 = 1
+			ir1 = 1
+		else
+			ir1 = ir0 + 1
 		end if
-		ir1 = ir0 + 1
 		r0 = histDist(ir0)
 		r1 = histDist(ir1)
-		! FIXME: there might be an issue here with only the ith element of rSolv() getting affected. or maybe it ends up working out
-		! with g(r) needing both so i->1-2 but force(r) only needing one so i->1
-		if (rSolv(i) .gt. r1) then
+		if ((rSolv(i) .lt. r0) .or. (rSolv(i) .gt. r1)) then
 			rSolv(i) = r1 ! if the solvent was far away enough to get repositioned to the last bin, set the distance to the last bin
 		end if
 
 		! cosTheta
-		f_index = (cosTh(i) - cosTh_min) / histCosThStepSize + 1_dp ! so index values start at 1
+		f_index = (cosTh(i) - cosTh_min) / histCosThStepSize + 0.5_dp ! so index values start at 1
 		ic0 = floor(f_index) ! get flanking cosTh indicies
 		if (ic0 .ge. histCosThBins) then
-			ic0 = histCosThBins - 1
+			ic0 = histCosThBins
+			ic1 = histCosThBins
 		else if (ic0 .lt. 1) then
 			ic0 = 1
+			ic1 = 1
+		else
+			ic1 = ic0 + 1
 		end if
-		ic1 = ic0 + 1
 		c0 = histCosTh(ic0)
 		c1 = histCosTh(ic1)
+		if ((cosTh(i) .lt. c0) .or. (cosTh(i) .gt. c1)) then
+			cosTh(i) = c1
+		end if
 
 		! phi
-		f_index = (phi(i) - phi_min) / histPhiStepSize + 1_dp ! so index values start at 1
+		f_index = (phi(i) - phi_min) / histPhiStepSize + 0.5_dp ! so index values start at 1
 		ip0 = floor(f_index) ! get flanking phi indicies
 		if (ip0 .ge. histPhiBins) then
-			ip0 = histPhiBins - 1
+			ip0 = histPhiBins
+			ip1 = histPhiBins
 		else if (ip0 .lt. 1) then
 			ip0 = 1
+			ip1 = 1
+		else
+			ip1 = ip0 + 1
 		end if
-		ip1 = ip0 + 1
 		p0 = histPhi(ip0)
 		p1 = histPhi(ip1)
+		if ((phi(i) .lt. p0) .or. (phi(i) .gt. p1)) then
+			phi(i) = p1
+		end if
 
-		! Note: interpolate
-		rd = (rSolv(i)-r0)/(r1-r0)
-		cd = (cosTh(i)-c0)/(c1-c0)
-		pd = (phi(i)-p0)/(p1-p0)
+		! Note: set fractional distances
+		if ( r0 .eq. r1) then ! if r1=r0 then rd would become a NaN.
+			rd = 1_dp
+		else
+			rd = (rSolv(i)-r0)/(r1-r0)
+		end if
+		if ( c0 .eq. c1 ) then ! if c1=c0 then cd would become a NaN.
+			cd = 1_dp
+		else
+			cd = (cosTh(i)-c0)/(c1-c0)
+		end if
+		if ( p0 .eq. p1 ) then ! if p1=p0 then pd would become a NaN.
+			pd = 1_dp
+		else
+			pd = (phi(i)-p0)/(p1-p0)
+		end if
 
 		f00 = hist3D(ihist,ir0,ic0,ip0)*(1-rd) + hist3D(ihist,ir1,ic0,ip0)*rd
 		f01 = hist3D(ihist,ir0,ic0,ip1)*(1-rd) + hist3D(ihist,ir1,ic0,ip1)*rd
@@ -666,7 +712,7 @@ subroutine trilin_interpolate(ihist, fP)
 		f0 = f00*(1-cd) + f10*cd
 		f1 = f01*(1-cd) + f11*cd
 		
-		fP = f0*(1-pd) + f1*pd
+		fP = fP * (f0*(1-pd) + f1*pd)
 	end do
 
 end subroutine trilin_interpolate
@@ -675,19 +721,36 @@ end subroutine trilin_interpolate
 ! integrate the average force from 'compute_avg_force' to get the PMF.
 subroutine integrate_force
 	use cfgData
+	use ctrlData
 	implicit none
 	integer 		:: d
 
 	allocate( u_dir(cfgRBins) )
 	u_dir = 0_dp
 
-	do d = 1, cfgRBins
-		if (d .eq. 1) then
-			u_dir(cfgRBins) = fAvg(cfgRBins) * RStepSize
-		else
-			u_dir(cfgRBins-(d-1)) = u_dir(cfgRBins-(d-2)) + fAvg(cfgRBins-(d-1)) * RStepSize
-		end if
-	end do
+	if (explicit_R .eqv. .false.) then
+		do d = 1, cfgRBins
+			if (d .eq. 1) then
+				u_dir(cfgRBins) = fAvg(cfgRBins) * RStepSize
+			else
+				u_dir(cfgRBins-(d-1)) = u_dir(cfgRBins-(d-2)) + fAvg(cfgRBins-(d-1)) * RStepSize
+			end if
+		end do
+	else if (explicit_R .eqv. .true.) then
+		do d = 1, cfgRBins
+			if (d .eq. 1) then
+				u_dir(cfgRBins) = fAvg(cfgRBins) * (R_axis(cfgRBins)-R_axis(cfgRBins-1))
+				print*, (R_axis(cfgRBins)-R_axis(cfgRBins-1))
+			else
+				! FIXME: is the delta R part of this correct?
+				u_dir(cfgRBins-(d-1)) = u_dir(cfgRBins-(d-2)) + fAvg(cfgRBins-(d-1)) * &
+					(R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
+				! it looks like the first value is getting printed twice. Also, the values might be wrong. Should it be (d-1) and
+				! (d-0)? instead of -2 and -1?
+				print*, (R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
+			end if
+		end do
+	end if
 
 end subroutine integrate_force
 
@@ -712,12 +775,14 @@ subroutine write_test_out(i_f, xBins, zBins)
 	write(35,*) "# 2.	Z Distance"
 	write(35,*) "# 3.	g(r)"
 	write(35,*) "# 4.	Force"
-	do i = 1, xBins
-		do j = 1, zBins
+	do j = 1, zBins
+		do i = 1, xBins
 			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
 		end do
 	end do
 	close(35)
+
+	flush(6)
 	
 898		format (4(1x,es14.7))
 
@@ -740,6 +805,8 @@ subroutine write_output(outFile)
 		write(35,899) R_axis(r), fAvg(r), u_dir(r)
 	end do
 	close(35)
+
+	flush(6)
 
 899		format (3(1x,es14.7)) ! scientific format
 
