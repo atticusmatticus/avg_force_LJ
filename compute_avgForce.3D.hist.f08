@@ -1,4 +1,4 @@
-! USAGE: ./this_file.x -cfg [CONFIGURATION FILE] -hist [2D HIST FILE]
+! USAGE: ./this_file.x -cfg [CONFIGURATION FILE] -hist [3D HIST FILE]
 !
 ! using 2D histrograms of spherically binned ie. g(r,cos(th)) for both PDF and Force
 !
@@ -40,14 +40,14 @@ end module cfgData
 module angleData
 	use prec
 	real(kind=dp), allocatable	:: sinThetaLF(:), cosThetaLF(:), sinPhiLF(:), cosPhiLF(:), sinPsiLF(:), cosPsiLF(:)
-	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1, cosTh2, phi1, phi2, psi1, psi2
+	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolvn(2), cosTh(2), phi(2), sSolv1(3), tSolv1(3), sSolv1n, tSolv1n
 
 end module angleData
 
 ! testing arrays for force and g(r)
 module ctrlData
 	use prec
-	real(kind=dp), allocatable	:: frcSPA(:,:), grSPA(:,:), explicitDist(:)
+	real(kind=dp), allocatable	:: frcSPA(:,:,:), grSPA(:,:), explicitDist(:)
 	integer						:: crdLines
 	logical						:: explicit_R
 
@@ -291,8 +291,9 @@ subroutine make_hist_table(histFile)
 		end if
 	end do
 	close(20)
+	print*, "nHistLines", nHistLines
 
-	allocate( histTmp(5,nHistLines) )
+	allocate( histTmp(7,nHistLines) )
 
 	! populate hist arrays
 	ios = 0; i = 1
@@ -300,9 +301,9 @@ subroutine make_hist_table(histFile)
 	! read file ignoring comment lines at the beginning
 	do while(ios>=0)
 		read(20,'(a)',IOSTAT=ios) line
-		if (line(1:1) .ne. "#") then
-			!			 dist		   cos(Th)		 phi/3			g(r)+		 g(r)- force(r)+
-			read(line,*) histTmp(1,i), histTmp(2,i), histTmp(3,i), histTmp(4,i), junk, histTmp(5,i)
+		if ((line(1:1) .ne. "#") .and. (ios .ge. 0)) then
+			!			 dist		   cos(Th)		 phi/3			g(r)+		 g(r)-	<f.r>+			<f.s>+		<f.t>+
+			read(line,*) histTmp(1,i), histTmp(2,i), histTmp(3,i), histTmp(4,i), junk, histTmp(5,i), histTmp(6,i), histTmp(7,i)
 			i = i + 1
 		end if
 	end do
@@ -338,7 +339,7 @@ subroutine make_hist_table(histFile)
 	write(*,*) "Histogram Phi Bins: ", histPhiBins
 	
 	allocate( histDist(histDistBins), histCosTh(histCosThBins), histPhi(histPhiBins), &
-		hist3D(2,histDistBins,histCosThBins,histPhiBins) )
+		hist3D(4,histDistBins,histCosThBins,histPhiBins) )
 	
 	! populate arrays that will be used in the rest of the calculation from temp array
 	do i = 1, histDistBins		! the values written out from python script are at half-bin distances
@@ -354,8 +355,15 @@ subroutine make_hist_table(histFile)
 	do i = 1, histDistBins
 		do j = 1, histCosThBins
 			do k = 1, histPhiBins
-				hist3D(1,i,j,k) = histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! g(r,cos,phi)
-				hist3D(2,i,j,k) = histTmp(5, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! frc(r,cos,phi)
+				! Note: interpolate the log of g(r) because it will be smoother and better behaved facilitating linear fitting.
+				if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
+					hist3D(1,i,j,k) = -1d12
+				else
+					hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
+				end if
+				hist3D(2,i,j,k) = histTmp(5, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.r>(r,cos,phi)
+				hist3D(3,i,j,k) = histTmp(6, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.s>(r,cos,phi)
+				hist3D(4,i,j,k) = histTmp(7, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.t>(r,cos,phi)
 			end do
 		end do
 	end do
@@ -414,7 +422,7 @@ subroutine compute_avg_force
 	use ctrlData
 	implicit none
 	integer 		:: xBins, zBins, r, i, j, ithLF, iphiLF, ipsiLF
-	real(kind=dp)	:: pi, density, phiLF, psiLF, psi_max, psi_min, gx, fx, fNew
+	real(kind=dp)	:: pi, density, phiLF, psiLF, psi_max, psi_min, gx(3), fx(3), fNew1, fNew2, fNew3, junk
 
 	write(*,*) "Setting up for average force iteration..."
 	pi = 3.1415926535_dp
@@ -437,7 +445,7 @@ subroutine compute_avg_force
 	R_axis = 0_dp; fAvg = 0_dp; x_axis = 0_dp; z_axis = 0_dp
 
 	! allocate arrays for control arrays
-	allocate( frcSPA(xBins, zBins), grSPA(xBins, zBins) )
+	allocate( frcSPA(3, xBins, zBins), grSPA(xBins, zBins) )
 
 	! Distance Axes
 	do r = 1, cfgRBins
@@ -509,50 +517,54 @@ subroutine compute_avg_force
 				rSolv1(1) = x_axis(i)+R_axis(r)/2_dp
 				rSolv1(2) = 0_dp
 				rSolv1(3) = z_axis(j)
-				rSolv1n = norm2(rSolv1)
+				rSolvn(1) = norm2(rSolv1)
 
 				rSolv2(1) = x_axis(i)-R_axis(r)/2_dp
 				rSolv2(2) = 0_dp
 				rSolv2(3) = z_axis(j)
-				rSolv2n = norm2(rSolv2)
+				rSolvn(2) = norm2(rSolv2)
 
 				! loop through orientations of solvent at x(i) and z(j)
 				do ithLF = 1, cfgCosThBins
 					do iphiLF = 1, cfgPhiBins
 						do ipsiLF = 1, cfgPsiBins
-							if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
+							if ((rSolvn(1) .lt. 1d-6) .or. (rSolvn(2) .lt. 1d-6)) then
 								gx = 0_dp ! avoid NaNs in calc_angles
 							else
 								call calc_angles(ipsiLF, ithLF, iphiLF)
 								call trilin_interpolate(1, gx) ! 1 is the index for the g(r,theta,phi)
+								gx(1) = dexp(gx(1))
 							end if
 
-							! if gx == 0 then don't waste time with the rest of the calculation
-							if (gx .gt. 1d-6) then
+							if (gx(1) .gt. 1d-6) then ! if gx(1) == 0 then don't waste time with the rest of the calculation
 								call trilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos,phi)
-								!		'gx' is the g(r) value taken from a histogram of g(r,cosTh,phi)
-								! 		'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
-								!		need cos(theta) and z and we should have the integral.
-								fNew = ( fx * gx * ( rSolv1(1) / rSolv1n ) )
-								fAvg(r) = fAvg(r) + (fNew * z_axis(j)) ! note: added r here instead of in fNew
-								frcSPA(i,j) = frcSPA(i,j) + fNew
-								grSPA(i,j) = grSPA(i,j) + gx
+
+								fNew1 = gx(1) * fx(1) * rSolv1(1)/rSolvn(1) ! f*g.x^{hat} for r
+								fNew2 = gx(1) * fx(2) * (sSolv1(1)/sSolv1n) ! f*g.x^{hat} for s
+								fNew3 = gx(1) * fx(3) * (tSolv1(1)/tSolv1n) ! f*g.x^{hat} for t
+
+								fAvg(r) = fAvg(r) + ((fNew1 + fNew2 + fNew3) * z_axis(j)) ! note: added r here instead of in fNew
+
+								frcSPA(1,i,j) = frcSPA(1,i,j) + fNew1
+								frcSPA(2,i,j) = frcSPA(2,i,j) + fNew2
+								frcSPA(3,i,j) = frcSPA(3,i,j) + fNew3
+								grSPA(i,j) = grSPA(i,j) + gx(1)
 							end if
 						end do !psi
 					end do !phi
 				end do !theta
 			end do !z
 		end do !x
+		! Normalize
 		do i = 1, xBins
 			do j = 1, zBins
-				!frcSPA(i,j) = frcSPA(i,j) / 2_dp / pi / z_axis(j) ! get rid of jacobian that puts force field to 0 at z=0
-				! normalize
-				frcSPA(i,j) = frcSPA(i,j)/grSPA(i,j)
-				frcSPA(i,j) = frcSPA(i,j)/2_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPhiStepSize*cfgPsiStepSize
+				frcSPA(1,i,j) = frcSPA(1,i,j)/grSPA(i,j)
+				frcSPA(2,i,j) = frcSPA(2,i,j)/grSPA(i,j)
+				frcSPA(3,i,j) = frcSPA(3,i,j)/grSPA(i,j)
 				grSPA(i,j) = grSPA(i,j)/cfgCosThBins/cfgPhiBins/cfgPsiBins
 			end do !z again
 		end do !x again
-		call write_test_out(r, xBins, zBins) ! write grSPA and fx arrays
+		call write_test_out(r, xBins, zBins) ! write grSPA and frcSPA arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
@@ -578,8 +590,8 @@ subroutine calc_angles(ipsiLF, ithLF, iphiLF)
 	h(3) = cosThetaLF(ithLF)
 
 	! calculate cos(theta1) and cos(theta2) of the solvent to lj-spheres 1 and 2 respectively.
-	cosTh1 = dot_product(rSolv1, h) / rSolv1n
-	cosTh2 = dot_product(rSolv2, h) / rSolv2n
+	cosTh(1) = dot_product(rSolv1, h) / rSolvn(1)
+	cosTh(2) = dot_product(rSolv2, h) / rSolvn(2)
 
 	! make rotated vector that represents the x-axis projection of one of the Cl vectors.
 	l(1) = cosPhiLF(iphiLF)*cosPsiLF(ipsiLF) - sinPhiLF(iphiLF)*cosThetaLF(ithLF)*sinPsiLF(ipsiLF)
@@ -588,25 +600,30 @@ subroutine calc_angles(ipsiLF, ithLF, iphiLF)
 
 	! calculate plane-normal vectors for LJ-C-H and LJ-C-Cl1
 	! note: use the cross product of the lj-c (rsolv1) and c-h (h) vectors, and the lj-c (rsolv1) and c-cl (l) vectors
-	na1 = cross_product(rSolv1,h)
-	nb1 = cross_product(rSolv1,l)
+	na1 = cross_product(rSolv1,h) ! this is (r1 x p) ie. the t vector
+	nb1 = cross_product(h,l)
 	na2 = cross_product(rSolv2,h)
-	nb2 = cross_product(rSolv2,l)
+	nb2 = cross_product(h,l)
 
 	! calculate phi1 and phi2 of the solvent to lj-spheres 1 and 2 respectively.
-	phi1 = acos( dot_product(na1,nb1) / ( norm2(na1)*norm2(nb1) ) )
-	phi2 = acos( dot_product(na2,nb2) / ( norm2(na2)*norm2(nb2) ) )
+	phi(1) = acos( dot_product(na1,nb1) / ( norm2(na1)*norm2(nb1) ) )
+	phi(2) = acos( dot_product(na2,nb2) / ( norm2(na2)*norm2(nb2) ) )
 
-	if (phi1 .ge. phi_max) then
-		phi1 = phi1 - phi_max
-	else if (( phi1 .gt. phi_hmax ) .and. ( phi1 .lt. phi_max )) then
-		phi1 = phi_max - phi1
+	if (phi(1) .ge. phi_max) then
+		phi(1) = phi(1) - phi_max
+	else if (( phi(1) .gt. phi_hmax ) .and. ( phi(1) .lt. phi_max )) then
+		phi(1) = phi_max - phi(1)
 	end if
-	if (phi2 .ge. phi_max) then
-		phi2 = phi2 - phi_max
-	else if (( phi2 .gt. phi_hmax ) .and. ( phi2 .lt. phi_max )) then
-		phi2 = phi_max - phi2
+	if (phi(2) .ge. phi_max) then
+		phi(2) = phi(2) - phi_max
+	else if (( phi(2) .gt. phi_hmax ) .and. ( phi(2) .lt. phi_max )) then
+		phi(2) = phi_max - phi(2)
 	end if
+
+	tSolv1 = na1
+	sSolv1 = cross_product(tSolv1,rSolv1)
+	tSolv1n = norm2(tSolv1)
+	sSolv1n = norm2(sSolv1)
 
 end subroutine calc_angles
 
@@ -617,16 +634,11 @@ subroutine trilin_interpolate(ihist, fP)
 	use histData
 	use angleData
 	implicit none
-	integer			:: i, iloop, ihist, ir0, ir1, ic0, ic1, ip0, ip1
-	real(kind=dp)	:: rSolv(2), cosTh(2), phi(2), f_index, r0, r1, c0, c1, p0, p1, rd, cd, pd, f00, f01, f10, f11, f0, f1, fP
+	integer			:: i, j, iloop, ihist, ir0, ir1, ic0, ic1, ip0, ip1
+	real(kind=dp)	:: f_index, r0, r1, c0, c1, p0, p1, rd, cd, pd, f00, f01, f10, f11, f0, f1, fP(3), rSolvnInt(2), cosThInt(2), &
+		phiInt(2)
 
-	rSolv(1) = rSolv1n
-	rSolv(2) = rSolv2n
-	cosTh(1) = cosTh1
-	cosTh(2) = cosTh2
-	phi(1) = phi1
-	phi(2) = phi2
-	fP = 1_dp
+	fP = 0_dp
 	if (ihist .eq. 1) then ! for g(r) both particles need to be taken into account
 		iloop = 2
 	else if (ihist .eq. 2) then ! for frc(r) only particle 1 needs to be accounted for
@@ -634,7 +646,7 @@ subroutine trilin_interpolate(ihist, fP)
 	end if
 	do i = 1, iloop ! Note: get the bounding values in each dimension.
 		! r
-		f_index = (rSolv(i)) / histDistStepSize + 0.5_dp ! take into account half-bin positions
+		f_index = (rSolvn(i)) / histDistStepSize + 0.5_dp ! take into account half-bin positions
 		ir0 = floor(f_index) ! get flanking r indicies
 		if (ir0 .ge. histDistBins) then
 			ir0 = histDistBins
@@ -647,8 +659,10 @@ subroutine trilin_interpolate(ihist, fP)
 		end if
 		r0 = histDist(ir0)
 		r1 = histDist(ir1)
-		if ((rSolv(i) .lt. r0) .or. (rSolv(i) .gt. r1)) then
-			rSolv(i) = r1 ! if the solvent was far away enough to get repositioned to the last bin, set the distance to the last bin
+		if ((rSolvn(i) .lt. r0) .or. (rSolvn(i) .gt. r1)) then
+			rSolvnInt(i) = r0 ! when rSolvn is outside the bounds it gets set to r0=r1.
+		else
+			rSolvnInt(i) = rSolvn(i)
 		end if
 
 		! cosTheta
@@ -666,7 +680,9 @@ subroutine trilin_interpolate(ihist, fP)
 		c0 = histCosTh(ic0)
 		c1 = histCosTh(ic1)
 		if ((cosTh(i) .lt. c0) .or. (cosTh(i) .gt. c1)) then
-			cosTh(i) = c1
+			cosThInt(i) = c0
+		else
+			cosThInt(i) = cosTh(i)
 		end if
 
 		! phi
@@ -684,24 +700,26 @@ subroutine trilin_interpolate(ihist, fP)
 		p0 = histPhi(ip0)
 		p1 = histPhi(ip1)
 		if ((phi(i) .lt. p0) .or. (phi(i) .gt. p1)) then
-			phi(i) = p1
+			phiInt(i) = p0
+		else
+			phiInt(i) = phi(i)
 		end if
 
 		! Note: set fractional distances
-		if ( r0 .eq. r1) then ! if r1=r0 then rd would become a NaN.
+		if ( ir0 .eq. ir1) then ! if r1=r0 then rd would become a NaN.
 			rd = 1_dp
 		else
-			rd = (rSolv(i)-r0)/(r1-r0)
+			rd = (rSolvnInt(i)-r0)/(r1-r0)
 		end if
-		if ( c0 .eq. c1 ) then ! if c1=c0 then cd would become a NaN.
+		if ( ic0 .eq. ic1 ) then ! if c1=c0 then cd would become a NaN.
 			cd = 1_dp
 		else
-			cd = (cosTh(i)-c0)/(c1-c0)
+			cd = (cosThInt(i)-c0)/(c1-c0)
 		end if
-		if ( p0 .eq. p1 ) then ! if p1=p0 then pd would become a NaN.
+		if ( ip0 .eq. ip1 ) then ! if p1=p0 then pd would become a NaN.
 			pd = 1_dp
 		else
-			pd = (phi(i)-p0)/(p1-p0)
+			pd = (phiInt(i)-p0)/(p1-p0)
 		end if
 
 		f00 = hist3D(ihist,ir0,ic0,ip0)*(1-rd) + hist3D(ihist,ir1,ic0,ip0)*rd
@@ -711,8 +729,22 @@ subroutine trilin_interpolate(ihist, fP)
 
 		f0 = f00*(1-cd) + f10*cd
 		f1 = f01*(1-cd) + f11*cd
-		
-		fP = fP * (f0*(1-pd) + f1*pd)
+
+		fP(1) = fP(1) + (f0*(1-pd) + f1*pd) ! forces are additive and FE is additive.
+
+		if (ihist .eq. 2) then ! it's a force calculation
+			do j = 3, 4
+				f00 = hist3D(j,ir0,ic0,ip0)*(1-rd) + hist3D(j,ir1,ic0,ip0)*rd
+				f01 = hist3D(j,ir0,ic0,ip1)*(1-rd) + hist3D(j,ir1,ic0,ip1)*rd
+				f10 = hist3D(j,ir0,ic1,ip0)*(1-rd) + hist3D(j,ir1,ic1,ip0)*rd
+				f11 = hist3D(j,ir0,ic1,ip1)*(1-rd) + hist3D(j,ir1,ic1,ip1)*rd
+
+				f0 = f00*(1-cd) + f10*cd
+				f1 = f01*(1-cd) + f11*cd
+
+				fP(j-1) = fP(j-1) + (f0*(1-pd) + f1*pd) ! forces are additive and FE is additive.
+			end do
+		end if
 	end do
 
 end subroutine trilin_interpolate
@@ -774,17 +806,19 @@ subroutine write_test_out(i_f, xBins, zBins)
 	write(35,*) "# 1.	X Distance"
 	write(35,*) "# 2.	Z Distance"
 	write(35,*) "# 3.	g(r)"
-	write(35,*) "# 4.	Force"
+	write(35,*) "# 4.	Force.r"
+	write(35,*) "# 5.	Force.s"
+	write(35,*) "# 6.	Force.t"
 	do j = 1, zBins
 		do i = 1, xBins
-			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
+			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(1,i,j), frcSPA(2,i,j), frcSPA(3,i,j)
 		end do
 	end do
 	close(35)
 
 	flush(6)
 	
-898		format (4(1x,es14.7))
+898		format (6(1x,es14.7))
 
 end subroutine write_test_out
 
