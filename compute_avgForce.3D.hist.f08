@@ -356,11 +356,12 @@ subroutine make_hist_table(histFile)
 		do j = 1, histCosThBins
 			do k = 1, histPhiBins
 				! Note: interpolate the log of g(r) because it will be smoother and better behaved facilitating linear fitting.
-				if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
-					hist3D(1,i,j,k) = -1d12
-				else
-					hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
-				end if
+				!if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
+				!	hist3D(1,i,j,k) = -1d12
+				!else
+				!	hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
+				!end if
+				hist3D(1,i,j,k) = histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! g(r,cos,phi)
 				hist3D(2,i,j,k) = histTmp(5, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.r>(r,cos,phi)
 				hist3D(3,i,j,k) = histTmp(6, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.s>(r,cos,phi)
 				hist3D(4,i,j,k) = histTmp(7, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.t>(r,cos,phi)
@@ -420,12 +421,12 @@ subroutine compute_avg_force
 	use cfgData
 	use angleData
 	use ctrlData
+	use constants
 	implicit none
 	integer 		:: xBins, zBins, r, i, j, ithLF, iphiLF, ipsiLF
-	real(kind=dp)	:: pi, density, phiLF, psiLF, psi_max, psi_min, gx(3), fx(3), fNew1, fNew2, fNew3, junk
+	real(kind=dp)	:: density, phiLF, psiLF, psi_max, psi_min, gx(3), fx(3), fNew1, fNew2, fNew3, junk
 
 	write(*,*) "Setting up for average force iteration..."
-	pi = 3.1415926535_dp
 	density = 0.00750924_dp ! numerical density of chloroforms per Angstrom**3
 
 	if (explicit_R .eqv. .true.) then
@@ -433,6 +434,9 @@ subroutine compute_avg_force
 		write(*,*) "Number of R Bins: ", cfgRBins
 	else if (explicit_R .eqv. .false.) then
 		cfgRBins = int( (R_max - R_min)/RStepSize )
+		if (cfgRBins .eq. 0) then
+			cfgRBins = 1
+		end if
 		write(*,*) "Number of R Bins: ", cfgRBins
 	end if
 	xBins = int( (2_dp * xz_range)/xzStepSize )
@@ -454,9 +458,6 @@ subroutine compute_avg_force
 		else if (explicit_r .eqv. .false.) then
 			R_axis(r) = (r-1) * RStepSize + R_min
 		end if
-	end do
-	do r = 1, crdLines
-		R_axis(r) = explicitDist(r)
 	end do
 	do i = 1, xBins
 		x_axis(i) = (i-1) * xzStepSize - xz_range + xzStepSize/2_dp
@@ -533,7 +534,7 @@ subroutine compute_avg_force
 							else
 								call calc_angles(ipsiLF, ithLF, iphiLF)
 								call trilin_interpolate(1, gx) ! 1 is the index for the g(r,theta,phi)
-								gx(1) = dexp(gx(1))
+								!gx(1) = dexp(gx(1))
 							end if
 
 							if (gx(1) .gt. 1d-6) then ! if gx(1) == 0 then don't waste time with the rest of the calculation
