@@ -584,7 +584,7 @@ subroutine calc_angles(ipsiLF, ithLF, iphiLF)
 	use constants
 	implicit none
 	integer						:: iphiLF, ithLF, ipsiLF
-	real(kind=dp),dimension(3)	:: h, l, y
+	real(kind=dp),dimension(3)	:: h, x, y
 
 	! make rotated solvent dipole vector at origin
 	h(1) = sinPsiLF(ipsiLF)*sinThetaLF(ithLF)
