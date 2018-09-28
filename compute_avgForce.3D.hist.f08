@@ -356,12 +356,12 @@ subroutine make_hist_table(histFile)
 		do j = 1, histCosThBins
 			do k = 1, histPhiBins
 				! Note: interpolate the log of g(r) because it will be smoother and better behaved facilitating linear fitting.
-				!if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
-				!	hist3D(1,i,j,k) = -1d12
-				!else
-				!	hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
-				!end if
-				hist3D(1,i,j,k) = histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! g(r,cos,phi)
+				if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
+					hist3D(1,i,j,k) = -1d12
+				else
+					hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
+				end if
+				!hist3D(1,i,j,k) = histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! g(r,cos,phi)
 				hist3D(2,i,j,k) = histTmp(5, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.r>(r,cos,phi)
 				hist3D(3,i,j,k) = histTmp(6, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.s>(r,cos,phi)
 				hist3D(4,i,j,k) = histTmp(7, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.t>(r,cos,phi)
@@ -534,7 +534,7 @@ subroutine compute_avg_force
 							else
 								call calc_angles(ipsiLF, ithLF, iphiLF)
 								call trilin_interpolate(1, gx) ! 1 is the index for the g(r,theta,phi)
-								!gx(1) = dexp(gx(1))
+								gx(1) = dexp(gx(1))
 							end if
 
 							if (gx(1) .gt. 1d-6) then ! if gx(1) == 0 then don't waste time with the rest of the calculation
@@ -581,9 +581,10 @@ subroutine calc_angles(ipsiLF, ithLF, iphiLF)
 	use cfgData
 	use angleData
 	use functions
+	use constants
 	implicit none
 	integer						:: iphiLF, ithLF, ipsiLF
-	real(kind=dp),dimension(3)	:: h, l, na1, nb1, na2, nb2
+	real(kind=dp),dimension(3)	:: h, l, y
 
 	! make rotated solvent dipole vector at origin
 	h(1) = sinPsiLF(ipsiLF)*sinThetaLF(ithLF)
@@ -595,33 +596,42 @@ subroutine calc_angles(ipsiLF, ithLF, iphiLF)
 	cosTh(2) = dot_product(rSolv2, h) / rSolvn(2)
 
 	! make rotated vector that represents the x-axis projection of one of the Cl vectors.
-	l(1) = cosPhiLF(iphiLF)*cosPsiLF(ipsiLF) - sinPhiLF(iphiLF)*cosThetaLF(ithLF)*sinPsiLF(ipsiLF)
-	l(2) = cosPhiLF(iphiLF)*sinPsiLF(ipsiLF) + sinPhiLF(iphiLF)*cosThetaLF(ithLF)*cosPsiLF(ipsiLF)
-	l(3) = sinPhiLF(iphiLF)*sinThetaLF(ithLF)
+	x(1) = cosPhiLF(iphiLF)*cosPsiLF(ipsiLF) - sinPhiLF(iphiLF)*cosThetaLF(ithLF)*sinPsiLF(ipsiLF)
+	x(2) = cosPhiLF(iphiLF)*sinPsiLF(ipsiLF) + sinPhiLF(iphiLF)*cosThetaLF(ithLF)*cosPsiLF(ipsiLF)
+	x(3) = sinPhiLF(iphiLF)*sinThetaLF(ithLF)
 
 	! calculate plane-normal vectors for LJ-C-H and LJ-C-Cl1
 	! note: use the cross product of the lj-c (rsolv1) and c-h (h) vectors, and the lj-c (rsolv1) and c-cl (l) vectors
-	na1 = cross_product(rSolv1,h) ! this is (r1 x p) ie. the t vector
-	nb1 = cross_product(h,l)
-	na2 = cross_product(rSolv2,h)
-	nb2 = cross_product(h,l)
+	y = cross_product(h,x)
 
-	! calculate phi1 and phi2 of the solvent to lj-spheres 1 and 2 respectively.
-	phi(1) = acos( dot_product(na1,nb1) / ( norm2(na1)*norm2(nb1) ) )
-	phi(2) = acos( dot_product(na2,nb2) / ( norm2(na2)*norm2(nb2) ) )
+	phi(1) = datan2( dot_product(y,-rSolv1) / (norm2(y)*rSolvn(1)), dot_product(x,-rSolv1) / (norm2(y)*rSolvn(1)))
+	phi(2) = datan2( dot_product(y,-rSolv2) / (norm2(y)*rSolvn(2)), dot_product(x,-rSolv2) / (norm2(y)*rSolvn(2)))
 
-	if (phi(1) .ge. phi_max) then
-		phi(1) = phi(1) - phi_max
-	else if (( phi(1) .gt. phi_hmax ) .and. ( phi(1) .lt. phi_max )) then
+	! phi [-pi,pi] --> phi'' [0,pi/3]
+	if ((phi(1) .gt. phi_hmax) .and. (phi(1) .lt. phi_max)) then
 		phi(1) = phi_max - phi(1)
+	else if ((phi(1) .gt. phi_max) .and. (phi(1) .lt. pi)) then
+		phi(1) = phi(1) - phi_max
+	else if ((phi(1) .gt. -pi) .and. (phi(1) .lt. -phi_max)) then
+		phi(1) = -(phi(1) + phi_max)
+	else if ((phi(1) .gt. -phi_max) .and. (phi(1) .lt. -phi_hmax)) then
+		phi(1) = phi(1) + phi_max
+	else if ((phi(1) .gt. -phi_hmax) .and. (phi(1) .lt. phi_min)) then
+		phi(1) = -phi(1)
 	end if
-	if (phi(2) .ge. phi_max) then
-		phi(2) = phi(2) - phi_max
-	else if (( phi(2) .gt. phi_hmax ) .and. ( phi(2) .lt. phi_max )) then
+	if ((phi(2) .gt. phi_hmax) .and. (phi(2) .lt. phi_max)) then
 		phi(2) = phi_max - phi(2)
+	else if ((phi(2) .gt. phi_max) .and. (phi(2) .lt. pi)) then
+		phi(2) = phi(2) - phi_max
+	else if ((phi(2) .gt. -pi) .and. (phi(2) .lt. -phi_max)) then
+		phi(2) = -(phi(2) + phi_max)
+	else if ((phi(2) .gt. -phi_max) .and. (phi(2) .lt. -phi_hmax)) then
+		phi(2) = phi(2) + phi_max
+	else if ((phi(2) .gt. -phi_hmax) .and. (phi(2) .lt. phi_min)) then
+		phi(2) = -phi(2)
 	end if
 
-	tSolv1 = na1
+	tSolv1 = cross_product(rSolv1,h) ! this is (r1 x p) ie. the t vector
 	sSolv1 = cross_product(tSolv1,rSolv1)
 	tSolv1n = norm2(tSolv1)
 	sSolv1n = norm2(sSolv1)
