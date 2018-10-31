@@ -433,8 +433,8 @@ subroutine compute_avg_force
 							! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
 							! 			'fx' is ||fs(x,z)||, force from solvent at (x,z)
 							!			Now we need cos(theta) and z and we should have the integral.
-							fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							fAvg(r) = fAvg(r) + fNew
+							fNew = ( gx * fx * ( rSolv1(1) / rSolv1n ) )
+							fAvg(r) = fAvg(r) + (fNew * z_axis(j))
 							frcSPA(i,j) = frcSPA(i,j) + fNew
 							grSPA(i,j) = grSPA(i,j) + gx
 						endif
@@ -445,7 +445,7 @@ subroutine compute_avg_force
 		do i = 1, num_x_bins
 			do j = 1, num_z_bins
 				! normalize
-				frcSPA(i,j) = frcSPA(i,j)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cosTheta_step_size
+				frcSPA(i,j) = frcSPA(i,j)/grSPA(i,j)
 				grSPA(i,j) = grSPA(i,j)/phi_bins/theta_bins
 			enddo !z again
 		enddo !x again
@@ -504,7 +504,7 @@ subroutine alpha(iphiLF, ithLF)
 
 	! make rotated solvent vector at origin
 	p(1) = sinPhiLF(iphiLF)*sinThetaLF(ithLF)
-	p(2) = cosPhiLF(iphiLF)*sinThetaLF(ithLF)
+	p(2) = -cosPhiLF(iphiLF)*sinThetaLF(ithLF)
 	p(3) = cosThetaLF(ithLF)
 
 	! calculate cos(theta1) and cos(theta2) relative to lj-spheres 1 and 2.
@@ -530,6 +530,8 @@ subroutine lin_interpolate(alp, fx)
 
 	if (i2 .ge. numFrcLines) then
 		fx = 0_dp
+	else if (i1 .lt. 1) then
+		fx = (( fDir(2) - fDir(1) ) / ( fDist(2) - fDist(1) )) * (alp - fDist(1)) + fDir(1)
 	else
 		fx = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
 	endif
@@ -605,8 +607,8 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(35,*) "# 2.	Z Distance"
 	write(35,*) "# 3.	g(r)"
 	write(35,*) "# 4.	Force"
-	do i = 1, num_x_bins
-		do j = 1, num_z_bins
+	do j = 1, num_z_bins
+		do i = 1, num_x_bins
 			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
 		enddo
 	enddo
