@@ -355,8 +355,8 @@ subroutine compute_avg_force
 					! NOTES : 	'gx' is Kirkwood Super Position Approximation of g(r)
 					! 			'fx' is ||fs(x,z)||, force from solvent at (x,z)
 					!			Now we need cos(theta) and z and we should have the integral.
-					fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-					fAvg(r) = fAvg(r) + fNew
+					fNew = ( gx * fx * ( rSolv1(1) / rSolv1n ) )
+					fAvg(r) = fAvg(r) + (fNew * z_axis(j))
 					frcSPA(i,j) = frcSPA(i,j) + fNew
 					grSPA(i,j) = grSPA(i,j) + gx
 				endif
@@ -365,14 +365,14 @@ subroutine compute_avg_force
 		do i = 1, num_x_bins
 			do j = 1, num_z_bins
 				! normalize
-				frcSPA(i,j) = frcSPA(i,j)/2.d0*0.00750924d0*xz_step_size*xz_step_size
+				frcSPA(i,j) = frcSPA(i,j)/grSPA(i,j)
 			enddo !z again
 		enddo !x again
 		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and frcSPA arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density*r**2
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)*2*pi*0.00750924*xz_step_size**2
+		fAvg(r) = fAvg(r)*2*0.00750924*xz_step_size**2
 	enddo !r
 
 endsubroutine compute_avg_force
@@ -425,6 +425,8 @@ subroutine lin_interpolate(alp, fx)
 
 	if (i2 .ge. numFrcLines) then
 		fx = 0
+	else if (i1 .lt. 1) then
+		fx = (( fDir(2) - fDir(1) ) / ( fDist(2) - fDist(1) )) * (alp - fDist(1)) + fDir(1)
 	else
 		fx = (( fDir(i2) - fDir(i1) ) / ( fDist(i2) - fDist(i1) )) * (alp - fDist(i1)) + fDir(i1)
 	endif
@@ -499,8 +501,8 @@ subroutine write_test_out(r, num_x_bins, num_z_bins)
 	write(35,*) "# 2.	Z Distance"
 	write(35,*) "# 3.	g(r) List"
 	write(35,*) "# 4.	Force"
-	do i = 1, num_x_bins
-		do j = 1, num_z_bins
+	do j = 1, num_z_bins
+		do i = 1, num_x_bins
 			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
 		enddo
 	enddo
