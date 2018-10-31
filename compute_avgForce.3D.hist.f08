@@ -31,7 +31,7 @@ module cfgData
 	real(kind=dp), allocatable	:: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
 	real(kind=dp)				:: RStepSize, xzStepSize, R_min, R_max, xz_range, cosTh_max, cosTh_min, phi_max, phi_min, phi_hmax,&
 		cfgCosThStepSize, cfgPhiStepSize, cfgPsiStepSize
-	character(len=8)			:: c_explicit_R
+	character(len=8)			:: c_explicit_R, g_fit
 	integer						:: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins
 
 end module cfgData
@@ -160,7 +160,7 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
 	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, thetaBinsFlag, phiBinsFlag,&
-		psiBinsFlag, c_explicit_RFlag
+		psiBinsFlag, c_explicit_RFlag, g_fitFlag
 
 	outFileFlag = .false.
 	RstepSizeFlag = .false.
@@ -172,6 +172,7 @@ subroutine read_cfg(cfgFile, outFile)
 	thetaBinsFlag = .false.
 	phiBinsFlag = .false.
 	psiBinsFlag = .false.
+	g_fitFlag = .false.
 
 	ios = 0
 
@@ -196,6 +197,10 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) c_explicit_R
 				write(*,*) "Use Explicit R Values:		", c_explicit_R
 				c_explicit_RFlag = .true.
+			else if (firstWord .eq. "g_fit") then
+				read(line,*) g_fit
+				write(*,*) "Use g(r) fitting:		", g_fit
+				g_fitFlag = .true.
 			else if (firstWord .eq. "R_max") then
 				read(line,*) R_max
 				write(*,*) "R Maximum Value:	", R_max
@@ -241,6 +246,10 @@ subroutine read_cfg(cfgFile, outFile)
 		write(*,*) "Config file must have a 'explicit_R' value"
 		stop
 	end if
+	if (g_fitFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'g_fit' value"
+		stop
+	end if
 	if (RmaxFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'R_max' value"
 		stop
@@ -274,6 +283,7 @@ end subroutine read_cfg
 ! read force file and make a lookup table.
 subroutine make_hist_table(histFile)
 	use histData
+	use cfgData
 	implicit none
 	character(len=64)			:: histFile
 	character(len=32)			:: junk
@@ -355,13 +365,16 @@ subroutine make_hist_table(histFile)
 	do i = 1, histDistBins
 		do j = 1, histCosThBins
 			do k = 1, histPhiBins
-				! Note: interpolate the log of g(r) because it will be smoother and better behaved facilitating linear fitting.
-				if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
-					hist3D(1,i,j,k) = -1d12
-				else
-					hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
+				if (g_fit .eq. 'log') then
+					! Note: interpolate the log of g(r) because it will be smoother and better behaved facilitating linear fitting.
+					if (histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) .lt. 1d-6) then ! g(r,cos,phi)
+						hist3D(1,i,j,k) = -1d12
+					else
+						hist3D(1,i,j,k) = dlog(histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k))
+					end if
+				else if (g_fit .eq. 'lin') then
+					hist3D(1,i,j,k) = histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! g(r,cos,phi)
 				end if
-				!hist3D(1,i,j,k) = histTmp(4, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! g(r,cos,phi)
 				hist3D(2,i,j,k) = histTmp(5, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.r>(r,cos,phi)
 				hist3D(3,i,j,k) = histTmp(6, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.s>(r,cos,phi)
 				hist3D(4,i,j,k) = histTmp(7, (i-1)*histCosThBins*histPhiBins + (j-1)*histPhiBins + k) ! <f.t>(r,cos,phi)
@@ -424,7 +437,7 @@ subroutine compute_avg_force
 	use constants
 	implicit none
 	integer 		:: xBins, zBins, r, i, j, ithLF, iphiLF, ipsiLF
-	real(kind=dp)	:: density, phiLF, psiLF, psi_max, psi_min, gx(3), fx(3), fNew1, fNew2, fNew3, junk
+	real(kind=dp)	:: density, phiLF, psiLF, psi_max, psi_min, gx(3), fx(3), fNew1, fNew2, fNew3
 
 	write(*,*) "Setting up for average force iteration..."
 	density = 0.00750924_dp ! numerical density of chloroforms per Angstrom**3
@@ -476,7 +489,7 @@ subroutine compute_avg_force
 	cosTh_min = -1_dp
 	cfgCosThStepSize = (cosTh_max - cosTh_min) / real(cfgCosThBins, dp)
 	do ithLF = 1, cfgCosThBins
-		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cfgCosThStepSize - 1_dp
+		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cfgCosThStepSize - cosTh_max
 		sinThetaLF(ithLF) = dsqrt(abs(1_dp-cosThetaLF(ithLF)**2))
 	end do
 	write(*,*) "Config Cos(Theta) Step Size: ", cfgCosThStepSize
@@ -534,7 +547,9 @@ subroutine compute_avg_force
 							else
 								call calc_angles(ipsiLF, ithLF, iphiLF)
 								call trilin_interpolate(1, gx) ! 1 is the index for the g(r,theta,phi)
-								gx(1) = dexp(gx(1))
+								if (g_fit .eq. 'log') then
+									gx(1) = dexp(gx(1))
+								end if
 							end if
 
 							if (gx(1) .gt. 1d-6) then ! if gx(1) == 0 then don't waste time with the rest of the calculation
@@ -649,7 +664,11 @@ subroutine trilin_interpolate(ihist, fP)
 	real(kind=dp)	:: f_index, r0, r1, c0, c1, p0, p1, rd, cd, pd, f00, f01, f10, f11, f0, f1, fP(3), rSolvnInt(2), cosThInt(2), &
 		phiInt(2)
 
-	fP = 0_dp
+	if (g_fit .eq. 'lin') then
+		fP = 1_dp
+	else if (g_fit .eq. 'log') then
+		fP = 0_dp
+	end if
 	if (ihist .eq. 1) then ! for g(r) both particles need to be taken into account
 		iloop = 2
 	else if (ihist .eq. 2) then ! for frc(r) only particle 1 needs to be accounted for
@@ -741,7 +760,11 @@ subroutine trilin_interpolate(ihist, fP)
 		f0 = f00*(1-cd) + f10*cd
 		f1 = f01*(1-cd) + f11*cd
 
-		fP(1) = fP(1) + (f0*(1-pd) + f1*pd) ! forces are additive and FE is additive.
+		if (g_fit .eq. 'lin') then
+			fP(1) = fP(1) * (f0*(1-pd) + f1*pd) ! forces are additive and gr is multiplicative
+		else if (g_fit .eq. 'log') then
+			fP(1) = fP(1) + (f0*(1-pd) + f1*pd) ! forces are additive and FE is additive.
+		end if
 
 		if (ihist .eq. 2) then ! it's a force calculation
 			do j = 3, 4
@@ -753,7 +776,11 @@ subroutine trilin_interpolate(ihist, fP)
 				f0 = f00*(1-cd) + f10*cd
 				f1 = f01*(1-cd) + f11*cd
 
-				fP(j-1) = fP(j-1) + (f0*(1-pd) + f1*pd) ! forces are additive and FE is additive.
+				if (g_fit .eq. 'lin') then
+					fP(j-1) = fP(j-1) * (f0*(1-pd) + f1*pd) ! forces are additive and g(r) is mulitiplicative
+				else if (g_fit .eq. 'log') then
+					fP(j-1) = fP(j-1) + (f0*(1-pd) + f1*pd) ! forces are additive and FE is additive.
+				end if
 			end do
 		end if
 	end do
