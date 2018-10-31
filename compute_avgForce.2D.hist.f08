@@ -1,4 +1,4 @@
-! USAGE: ./this_file.x -cfg [CONFIGURATION FILE] -hist [2D HIST FILE]
+! USAGE: ./this_file.x -cfg [CONFIGURATION FILE] -hist [3D HIST FILE]
 !
 ! using 2D histrograms of spherically binned ie. g(r,cos(th)) for both PDF and Force
 !
@@ -16,47 +16,42 @@
 !!!!!!!!!!!!!!!!!!   Modules   !!!!!!!!!!!!!!!!!!
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-! precision module
-module prec
-	integer, parameter	:: dp = kind(1.0d0)
-endmodule prec
-
 ! data for the density and force tables.
 module histData
 	use prec
-	real(kind=dp), allocatable	:: histDist(:), histAng(:), hist2D(:,:,:)
-	real(kind=dp)				:: histDist_step_size, histCosTh_step_size, hHistDist_step_size
+	real(kind=dp), allocatable	:: histDist(:), histCosTh(:), hist2D(:,:,:)
+	real(kind=dp)				:: histDistStepSize, histCosThStepSize
 	integer						:: histDistBins, histCosThBins
 
-endmodule histData
+end module histData
 
 ! data from the config file.
 module cfgData
 	use prec
 	real(kind=dp), allocatable	:: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
-	real(kind=dp)				:: R_step_size, xz_step_size, R_min, R_max, xz_range, cosTh_max, cosTh_min, cfgCosTh_step_size, &
-		phi_step_size
-	character(len=8)			:: c_explicit_R
-	integer						:: num_R_bins, cfgCosTh_bins, cfgPhiBins
+	real(kind=dp)				:: RStepSize, xzStepSize, R_min, R_max, xz_range, cosTh_max, cosTh_min, cfgCosThStepSize, &
+		& cfgPsiStepSize
+	character(len=8)			:: c_explicit_R, g_fit
+	integer						:: cfgRBins, cfgCosThBins, cfgPsiBins
 
-endmodule cfgData
+end module cfgData
 
 ! data for calculating cosTh value.
-module thetaData
+module angleData
 	use prec
-	real(kind=dp), allocatable	:: cosThetaLF(:), sinThetaLF(:), sinPhiLF(:), cosPhiLF(:)
-	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolv1n, rSolv2n, cosTh1, cosTh2
+	real(kind=dp), allocatable	:: sinThetaLF(:), cosThetaLF(:), sinPsiLF(:), cosPsiLF(:)
+	real(kind=dp)				:: rSolv1(3), rSolv2(3), rSolvn(2), cosTh(2), sSolv1(3), sSolv1n, tSolv1(3)
 
-endmodule thetaData
+end module angleData
 
 ! testing arrays for force and g(r)
 module ctrlData
 	use prec
-	real(kind=dp), allocatable	:: frcSPA(:,:), grSPA(:,:), explicitDist(:)
+	real(kind=dp), allocatable	:: frcSPA(:,:,:), grSPA(:,:), explicitDist(:)
 	integer						:: crdLines
 	logical						:: explicit_R
 
-endmodule ctrlData
+end module ctrlData
 
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -92,13 +87,13 @@ program compute_avgForce
 	! write PMF output file
 	call write_output(outFile)
 	
-	! Print time taken to finish calculation.
+	! Write time taken to finish calculation.
 	tf = omp_get_wtime()
 	write(*,*) "Total time elapsed: ", tf-ti, "seconds"
 
 	flush(6)
 
-endprogram compute_avgForce
+end program compute_avgForce
 
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -124,36 +119,36 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
 			i = i+1
 			call get_command_argument(i,histFile)
 			histFileFlag=.true.
-			print*, "hist File: ", histFile
+			write(*,*) "hist File: ", histFile
 		case ('-cfg')
 			i = i+1
 			call get_command_argument(i,cfgFile)
 			cfgFileFlag=.true.
-			print*, "cfg File: ", cfgFile
+			write(*,*) "cfg File: ", cfgFile
 		case default
-			print*, 'Unrecognized command-line option: ', arg
-			print*, 'Usage: compute_avgForce.x -hist [hist file]'
-			print*, 'Usage: compute_avgForce.x -cfg [cfg file]'
+			write(*,*) 'Unrecognized command-line option: ', arg
+			write(*,*) 'Usage: compute_avgForce.x -hist [hist file]'
+			write(*,*) 'Usage: compute_avgForce.x -cfg [cfg file]'
 			stop
 
 		end select
 		i = i+1
 		if (i.ge.command_argument_count()) exit
-	enddo
+	end do
 
 	if (histFileFlag.eqv..false.) then
 		write(*,*) "Must provide a hist file using command line argument -hist [hist file name]"
 		stop
-	endif
+	end if
 
 	if (cfgFileFlag.eqv..false.) then
 		write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
 		stop
-	endif
+	end if
 
 	flush(6)
 
-endsubroutine parse_command_line
+end subroutine parse_command_line
 
 
 ! read python cfg file for g(r) parameters
@@ -164,8 +159,8 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=128) 	:: line
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
-	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, phiBinsFlag, thetaBinsFlag,&
-		c_explicit_RFlag
+	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, thetaBinsFlag, psiBinsFlag,&
+		& c_explicit_RFlag, g_fitFlag
 
 	outFileFlag = .false.
 	RstepSizeFlag = .false.
@@ -174,8 +169,9 @@ subroutine read_cfg(cfgFile, outFile)
 	RmaxFlag = .false.
 	RminFlag = .false.
 	xzRangeFlag = .false.
-	phiBinsFlag = .false.
 	thetaBinsFlag = .false.
+	psiBinsFlag = .false.
+	g_fitFlag = .false.
 
 	ios = 0
 
@@ -188,18 +184,22 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) outFile
 				write(*,*) "Output File:	", outFile
 				outFileFlag = .true.
-			else if (firstWord .eq. "R_step_size") then
-				read(line,*) R_step_size
-				write(*,*) "PMF Step Size:	", R_step_size
+			else if (firstWord .eq. "RStepSize") then
+				read(line,*) RStepSize
+				write(*,*) "PMF Step Size:	", RStepSize
 				RstepSizeFlag = .true.
-			else if (firstWord .eq. "xz_step_size") then
-				read(line,*) xz_step_size
-				write(*,*) "Solvent Grid Step Size:	", xz_step_size
+			else if (firstWord .eq. "xzStepSize") then
+				read(line,*) xzStepSize
+				write(*,*) "Solvent Grid Step Size:	", xzStepSize
 				xzStepSizeFlag = .true.
 			else if (firstWord .eq. "explicit_R") then
 				read(line,*) c_explicit_R
 				write(*,*) "Use Explicit R Values:		", c_explicit_R
 				c_explicit_RFlag = .true.
+			else if (firstWord .eq. "g_fit") then
+				read(line,*) g_fit
+				write(*,*) "Use g(r) fitting:		", g_fit
+				g_fitFlag = .true.
 			else if (firstWord .eq. "R_max") then
 				read(line,*) R_max
 				write(*,*) "R Maximum Value:	", R_max
@@ -213,63 +213,68 @@ subroutine read_cfg(cfgFile, outFile)
 				write(*,*) "XZ - Range:	", xz_range
 				xzRangeFlag = .true.
 			else if (firstWord .eq. "theta_bins") then
-				read(line,*) cfgCosTh_bins
-				write(*,*) "Theta Bins:	", cfgCosTh_bins
+				read(line,*) cfgCosThBins
+				write(*,*) "Theta Bins:	", cfgCosThBins
 				thetaBinsFlag= .true.
-			else if (firstWord .eq. "phi_bins") then
-				read(line,*) cfgPhiBins
-				write(*,*) "Phi Bins:	", cfgPhiBins
-				phiBinsFlag= .true.
-			endif
-		endif
-	enddo
+			else if (firstWord .eq. "psi_bins") then
+				read(line,*) cfgPsiBins
+				write(*,*) "Psi Bins:	", cfgPsiBins
+				psiBinsFlag= .true.
+			end if
+		end if
+	end do
 	close(20)
 
 	if (RstepSizeFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'R_step_size' value"
+		write(*,*) "Config file must have a 'RStepSize' value"
 		stop
-	endif
+	end if
 	if (xzStepSizeFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'xz_step_size' value"
+		write(*,*) "Config file must have a 'xzStepSize' value"
 		stop
-	endif
+	end if
 	if (outFileFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'out_file' value"
 		stop
-	endif
+	end if
 	if (c_explicit_RFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'explicit_R' value"
 		stop
-	endif
+	end if
+	if (g_fitFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'g_fit' value"
+		stop
+	end if
 	if (RmaxFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'R_max' value"
 		stop
-	endif
+	end if
 	if (RminFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'R_min' value"
 		stop
-	endif
+	end if
 	if (xzRangeFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'xz_range' value"
 		stop
-	endif
-	if (phiBinsFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'phi_bins' value"
-		stop
-	endif
+	end if
 	if (thetaBinsFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'cfgCosTh_bins' value"
+		write(*,*) "Config file must have a 'theta_bins' value"
 		stop
-	endif
+	end if
+	if (psiBinsFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'psi_bins' value"
+		stop
+	end if
 
 	flush(6)
 
-endsubroutine read_cfg
+end subroutine read_cfg
 
 
 ! read force file and make a lookup table.
 subroutine make_hist_table(histFile)
 	use histData
+	use cfgData
 	implicit none
 	character(len=64)			:: histFile
 	character(len=32)			:: junk
@@ -277,32 +282,32 @@ subroutine make_hist_table(histFile)
 	integer						:: ios, i, j, nHistLines
 	real(kind=dp), allocatable	:: histTmp(:,:)
 
-	! read number of lines in histFile and allocate that many points in temporary histogram list.
+	! read number of lines in histFile and allocate that many points in temporary histogram list, histTmp.
 	ios = 0; nHistLines = -1
 	open(20,file=histFile)
 	do while(ios>=0)
 		read(20,'(a)',IOSTAT=ios) line
 		if (line(1:1) .ne. "#") then
 			nHistLines = nHistLines + 1
-		endif
-	enddo
+		end if
+	end do
 	close(20)
+	print*, "nHistLines", nHistLines
 
-	allocate( histTmp(4,nHistLines) )
+	allocate( histTmp(5,nHistLines) )
 
 	! populate hist arrays
-	ios = 0
-	i = 1
+	ios = 0; i = 1
 	open(20,file=histFile)
 	! read file ignoring comment lines at the beginning
 	do while(ios>=0)
 		read(20,'(a)',IOSTAT=ios) line
-		if (line(1:1) .ne. "#") then
-			!			 dist		   cos(Th)		 g(r)+		   g(r)- force(r)+
-			read(line,*) histTmp(1,i), histTmp(2,i), histTmp(3,i), junk, histTmp(4,i) ! FIXME: best way to populate these arrays?
+		if ((line(1:1) .ne. "#") .and. (ios .ge. 0)) then
+			!			 dist		   cos(Th)		 g(r)+		  g(r)-	  <f.r>+		<f.s>+
+			read(line,*) histTmp(1,i), histTmp(2,i), histTmp(3,i), junk, histTmp(4,i), histTmp(5,i)
 			i = i + 1
-		endif
-	enddo
+		end if
+	end do
 	close(20)
 
 	! XXX: Unique value determination -- TESTING
@@ -311,45 +316,57 @@ subroutine make_hist_table(histFile)
 			histDistBins = 1
 			ios = 0
 		else ! i = 2, nHistLines
-			if ( (histTmp(1,i) .lt. (histTmp(1,i-1)-1d-6)) .or. (histTmp(1,i) .gt. (histTmp(1,i-1)+1d-6)) ) then
+			if (( histTmp(1,i) .lt. (histTmp(1,i-1)-1d-6) ) .or. ( histTmp(1,i) .gt. (histTmp(1,i-1)+1d-6) )) then
+				! note: this statement will trigger when a value in the first column (dist) is different than the value in the row
+				! before it.
 				histDistBins = histDistBins + 1
-			endif
-			if ( (histTmp(2,i) .gt. (histTmp(2,1)-1d-6)) .and. (histTmp(2,i) .lt. (histTmp(2,1)+1d-6)) .and. (ios .eq. 0) ) then
-				! note: this statement will trigger when i = histCosThBins + 1 because it finds the first repeated element
-				histCosThBins = i - 1
+			end if
+			if (( histTmp(2,i) .gt. (histTmp(2,1)-1d-6) ) .and. ( histTmp(2,i) .lt. (histTmp(2,1)+1d-6) ) .and. ( ios .eq. 0 ) &
+				& ) then
+				! note: this statement will trigger when i = histCosThBins+1 because it finds the first repeated element
+				histCosThBins = (i - 1)
 				ios = 1
-			endif
-		endif
-	enddo
-	print *, "Histogram Distance Bins: ", histDistBins
-	print *, "Histogram Cosine Theta Bins: ", histCosThBins
+			end if
+		end if
+	end do
+	write(*,*) "Histogram Distance Bins: ", histDistBins
+	write(*,*) "Histogram Cosine Theta Bins: ", histCosThBins
 	
-	allocate( histDist(histDistBins), histAng(histCosThBins), hist2D(2,histDistBins,histCosThBins) )
+	allocate( histDist(histDistBins), histCosTh(histCosThBins), hist2D(3,histDistBins,histCosThBins) )
 	
 	! populate arrays that will be used in the rest of the calculation from temp array
-	do i = 1, histDistBins		! the values printed out from python script are at half-bin distances
-		histDist(i) = histTmp(1,histCosThBins*i-1)
-	enddo
+	do i = 1, histDistBins		! the values written out from python script are at half-bin distances
+		histDist(i) = histTmp(1,histCosThBins*(i-1)+1)
+	end do
 	do i = 1, histCosThBins
-		histAng(i) = histTmp(2,i)
-	enddo
+		histCosTh(i) = histTmp(2,i)
+	end do
 
 	do i = 1, histDistBins
 		do j = 1, histCosThBins
-			hist2D(1,i,j) = histTmp(3,(i-1)*histCosThBins+j) ! g(r,cos)
-			hist2D(2,i,j) = histTmp(4,(i-1)*histCosThBins+j) ! frc(r,cos)
-		enddo
-	enddo
+			if (g_fit .eq. 'log') then
+				! Note: interpolate the log of g(r) because it will be smoother and better behaved facilitating linear fitting.
+				if (histTmp(3, (i-1)*histCosThBins + j) .lt. 1d-6) then ! g(r,cos,phi)
+					hist2D(1,i,j) = -1d12
+				else
+					hist2D(1,i,j) = dlog(histTmp(3, (i-1)*histCosThBins + j))
+				end if
+			else if (g_fit .eq. 'lin') then
+				hist2D(1,i,j) = histTmp(3, (i-1)*histCosThBins + j) ! g(r,cos,phi)
+			end if
+			hist2D(2,i,j) = histTmp(4, (i-1)*histCosThBins + j) ! <f.r>(r,cos,phi)
+			hist2D(3,i,j) = histTmp(5, (i-1)*histCosThBins + j) ! <f.s>(r,cos,phi)
+		end do
+	end do
 
-	histDist_step_size = histDist(2) - histDist(1)
-	hHistDist_step_size = histDist_step_size / 2_dp
-	write(*,*) "Histogram Distance Step Size: ", histDist_step_size
-	histCosTh_step_size = histAng(2) - histAng(1)
-	write(*,*) "Histogram Angle Step Size: ", histCosTh_step_size
+	histDistStepSize = histDist(2) - histDist(1)
+	write(*,*) "Histogram Distance Step Size: ", histDistStepSize
+	histCosThStepSize = histCosTh(2) - histCosTh(1)
+	write(*,*) "Histogram Cosine Theta Step Size: ", histCosThStepSize
 
 	flush(6)
 
-endsubroutine make_hist_table
+end subroutine make_hist_table
 
 
 ! read LJ--LJ displacements from file
@@ -371,7 +388,7 @@ subroutine R_list
 		do while(ios>=0)
 			read(20,'(a)',IOSTAT=ios) line
 			crdLines = crdLines + 1
-		enddo
+		end do
 		close(20)
 
 		allocate( explicitDist(crdLines) )
@@ -380,245 +397,323 @@ subroutine R_list
 		open(20,file='crd_list.out',status='old')
 		do i = 1, crdLines
 			read(20,*,iostat=ios) junk, explicitDist(i)
-		enddo
+		end do
 		close(20)
-	endif
+	end if
 
-endsubroutine R_list
+end subroutine R_list
 
 
 ! do the average force integral
 subroutine compute_avg_force
 	use cfgData
-	use thetaData
+	use angleData
 	use ctrlData
+	use constants
 	implicit none
-	integer 		:: num_x_bins, num_z_bins, r, i, j, ithLF, iphiLF
-	real(kind=dp)	:: pi, phiLF, phi_max, phi_min, gx, fx, fNew
+	integer 		:: xBins, zBins, r, i, j, ithLF, ipsiLF
+	real(kind=dp)	:: density, psiLF, psi_max, psi_min, gx(3), fx(3), fNew1, fNew2
 
-	pi = 3.1415926535_dp
+	write(*,*) "Setting up for average force iteration..."
+	density = 0.00750924_dp ! numerical density of chloroforms per Angstrom**3
 
 	if (explicit_R .eqv. .true.) then
-		num_R_bins = crdLines
-		write(*,*) "Number of R Bins: ", num_R_bins
+		cfgRBins = crdLines
+		write(*,*) "Number of R Bins: ", cfgRBins
 	else if (explicit_R .eqv. .false.) then
-		num_R_bins = int( (R_max - R_min)/R_step_size )
-		write(*,*) "Number of R Bins: ", num_R_bins
-	endif
-	num_x_bins = int( (2_dp * xz_range)/xz_step_size )
-	write(*,*) "Number of X Bins: ", num_x_bins
-	num_z_bins = int( (xz_range)/xz_step_size )
-	write(*,*) "Number of Z Bins: ", num_z_bins
+		cfgRBins = int( (R_max - R_min)/RStepSize )
+		if (cfgRBins .eq. 0) then
+			cfgRBins = 1
+		end if
+		write(*,*) "Number of R Bins: ", cfgRBins
+	end if
+	xBins = int( (2_dp * xz_range)/xzStepSize )
+	write(*,*) "Number of X Bins: ", xBins
+	zBins = int( (xz_range)/xzStepSize )
+	write(*,*) "Number of Z Bins: ", zBins
 
 	! allocate array sizes for axes and average force
-	allocate( R_axis(num_R_bins), fAvg(num_R_bins), x_axis(num_x_bins), z_axis(num_z_bins) )
+	allocate( R_axis(cfgRBins), fAvg(cfgRBins), x_axis(xBins), z_axis(zBins) )
 	R_axis = 0_dp; fAvg = 0_dp; x_axis = 0_dp; z_axis = 0_dp
 
 	! allocate arrays for control arrays
-	allocate( frcSPA(num_x_bins, num_z_bins), grSPA(num_x_bins, num_z_bins) )
+	allocate( frcSPA(2, xBins, zBins), grSPA(xBins, zBins) )
 
 	! Distance Axes
-	do r = 1, num_R_bins
+	do r = 1, cfgRBins
 		if (explicit_R .eqv. .true.) then
 			R_axis(r) = explicitDist(r)
 		else if (explicit_r .eqv. .false.) then
-			R_axis(r) = (r-1) * R_step_size + R_min
-		endif
-	enddo
-	do r = 1, crdLines
-		R_axis(r) = explicitDist(r)
-	enddo
-	do i = 1, num_x_bins
-		x_axis(i) = (i-1) * xz_step_size - xz_range + xz_step_size/2_dp
-	enddo
-	do j = 1, num_z_bins
-		z_axis(j) = (j-1) * xz_step_size + xz_step_size/2_dp
-	enddo
+			R_axis(r) = (r-1) * RStepSize + R_min
+		end if
+	end do
+	do i = 1, xBins
+		x_axis(i) = (i-1) * xzStepSize - xz_range + xzStepSize/2_dp
+	end do
+	do j = 1, zBins
+		z_axis(j) = (j-1) * xzStepSize + xzStepSize/2_dp
+	end do
 
-	! Angles
-	allocate( cosThetaLF(cfgCosTh_bins), sinThetaLF(cfgCosTh_bins), sinPhiLF(cfgPhiBins), cosPhiLF(cfgPhiBins) )
+	! ANGLES
+	! Theta
+	! tilt off of z
+	allocate( cosThetaLF(cfgCosThBins), sinThetaLF(cfgCosThBins), sinPsiLF(cfgPsiBins), cosPsiLF(cfgPsiBins) )
+
 	cosTh_max = 1_dp
 	cosTh_min = -1_dp
-	cfgCosTh_step_size = (cosTh_max - cosTh_min) / real(cfgCosTh_bins, dp)
-	do ithLF = 1, cfgCosTh_bins
-		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cfgCosTh_step_size - 1_dp
+	cfgCosThStepSize = (cosTh_max - cosTh_min) / real(cfgCosThBins, dp)
+	do ithLF = 1, cfgCosThBins
+		cosThetaLF(ithLF) = (ithLF-0.5_dp)*cfgCosThStepSize - 1_dp
 		sinThetaLF(ithLF) = dsqrt(abs(1_dp-cosThetaLF(ithLF)**2))
-	enddo
-	write(*,*) "Cos(Theta) Step Size: ", cfgCosTh_step_size
-	phi_max = 2_dp*pi
-	phi_min = 0_dp
-	phi_step_size = (phi_max - phi_min) / real(cfgPhiBins, dp)
-	do iphiLF = 1, cfgPhiBins
-		phiLF = (iphiLF+0.5_dp)*phi_step_size
-		sinPhiLF(iphiLF) = dsin(phiLF)
-		cosPhiLF(iphiLF) = dcos(phiLF)
-	enddo
-	write(*,*) "Phi Step Size: ", phi_step_size
+	end do
+	write(*,*) "Config Cos(Theta) Step Size: ", cfgCosThStepSize
+
+	! Psi
+	! processison about z
+	psi_max = 2_dp*pi
+	psi_min = 0_dp
+	cfgPsiStepSize = (psi_max - psi_min) / real(cfgPsiBins, dp)
+	do ipsiLF = 1, cfgPsiBins
+		psiLF = (ipsiLF+0.5_dp)*cfgPsiStepSize
+		sinPsiLF(ipsiLF) = dsin(psiLF)
+		cosPsiLF(ipsiLF) = dcos(psiLF)
+	end do
+	write(*,*) "Config Psi Step Size: ", cfgPsiStepSize
+
+	write(*,*) "Computing average force..."
 
 	flush(6)
 
 	! Calculate the average force integral for top half of bisecting plane of cylinder
-	do r = 1, num_R_bins ! loop lj--lj distances
+	do r = 1, cfgRBins ! loop lj--lj distances
 		frcSPA = 0_dp; grSPA = 0_dp
-		do i = 1, num_x_bins ! full length of cylinder
-			do j = 1, num_z_bins ! top half of bisecting plane of cylinder
+		do i = 1, xBins ! full length of cylinder
+			do j = 1, zBins ! top half of bisecting plane of cylinder
 				rSolv1(1) = x_axis(i)+R_axis(r)/2_dp
 				rSolv1(2) = 0_dp
 				rSolv1(3) = z_axis(j)
-				rSolv1n = norm2(rSolv1)
+				rSolvn(1) = norm2(rSolv1)
 
 				rSolv2(1) = x_axis(i)-R_axis(r)/2_dp
 				rSolv2(2) = 0_dp
 				rSolv2(3) = z_axis(j)
-				rSolv2n = norm2(rSolv2)
+				rSolvn(2) = norm2(rSolv2)
 
 				! loop through orientations of solvent at x(i) and z(j)
-				do ithLF = 1, cfgCosTh_bins
-					do iphiLF = 1, cfgPhiBins
-						if ((rSolv1n .lt. 1d-6) .or. (rSolv2n .lt. 1d-6)) then
-							gx = 0_dp ! avoid NaNs in calc_cosTh
+				do ithLF = 1, cfgCosThBins
+					do ipsiLF = 1, cfgPsiBins
+						if ((rSolvn(1) .lt. 1d-6) .or. (rSolvn(2) .lt. 1d-6)) then
+							gx = 0_dp ! avoid NaNs in calc_angles
 						else
-							call calc_cosTh(iphiLF, ithLF)
-							call bilin_interpolate(1, gx) ! 1 is the index for the g(r,cos)
-						endif
+							call calc_angles(ipsiLF, ithLF)
+							call bilin_interpolate(1, gx) ! 1 is the index for the g(r,theta,phi)
+							if (g_fit .eq. 'log') then
+								gx(1) = dexp(gx(1))
+							end if
+						end if
 
-						! if gx == 0 then don't waste time with the rest of the calculation
-						if (gx .gt. 1d-6) then
-							call bilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos)
-							!		'gx' is the g(r) value taken from a histogram of g(r,cosTh)
-							! 		'fx' is ||fs(x,z)||, force from solvent at (x,z). Now we
-							!		need cos(theta) and z and we should have the integral.
-							fNew = ( gx * fx * z_axis(j) * ( rSolv1(1) / rSolv1n ) )
-							fAvg(r) = fAvg(r) + fNew
-							frcSPA(i,j) = frcSPA(i,j) + fNew
-							grSPA(i,j) = grSPA(i,j) + gx
-						endif
-					enddo !phi
-				enddo !theta
-			enddo !z
-		enddo !x
-		do i = 1, num_x_bins
-			do j = 1, num_z_bins
-				!frcSPA(i,j) = frcSPA(i,j) / 2_dp / pi / z_axis(j) ! get rid of jacobian that puts force field to 0 at z=0
-				! normalize
-				frcSPA(i,j) = frcSPA(i,j)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cfgCosTh_step_size
-				grSPA(i,j) = grSPA(i,j)/cfgPhiBins/cfgCosTh_bins
-			enddo !z again
-		enddo !x again
-		call write_test_out(r, num_x_bins, num_z_bins) ! write grSPA and fx arrays
+						if (gx(1) .gt. 1d-6) then ! if gx(1) == 0 then don't waste time with the rest of the calculation
+							call bilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos,phi)
+
+							fNew1 = gx(1) * fx(1) * rSolv1(1)/rSolvn(1) ! f*g.x^{hat} for r
+							fNew2 = gx(1) * fx(2) * (sSolv1(1)/sSolv1n) ! f*g.x^{hat} for s
+
+							fAvg(r) = fAvg(r) + ((fNew1 + fNew2) * z_axis(j)) ! note: added r here instead of in fNew
+
+							frcSPA(1,i,j) = frcSPA(1,i,j) + fNew1
+							frcSPA(2,i,j) = frcSPA(2,i,j) + fNew2
+							grSPA(i,j) = grSPA(i,j) + gx(1)
+						end if
+					end do !psi
+				end do !theta
+			end do !z
+		end do !x
+		! Normalize
+		do i = 1, xBins
+			do j = 1, zBins
+				frcSPA(1,i,j) = frcSPA(1,i,j)/grSPA(i,j)
+				frcSPA(2,i,j) = frcSPA(2,i,j)/grSPA(i,j)
+				grSPA(i,j) = grSPA(i,j)/cfgCosThBins/cfgPsiBins
+			end do !z again
+		end do !x again
+		call write_test_out(r, xBins, zBins) ! write grSPA and frcSPA arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density/4/pi (4pi steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)/2_dp*0.00750924_dp*xz_step_size*xz_step_size*phi_step_size*cfgCosTh_step_size
-	enddo !r
+		fAvg(r) = fAvg(r)/2_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPsiStepSize
+	end do !r
 
-endsubroutine compute_avg_force
+end subroutine compute_avg_force
 
 
-! rotate solvent vector 'p' and calculate cosTh for lj particles 1 and 2.
-subroutine calc_cosTh(iphiLF, ithLF)
+! rotate two solvent vectors 'h' for the dipole and 'l' for the Cl1 via a twist 'phi', tilt 'theta', and procession about z 'psi'
+! for lj particles 1 and 2.
+subroutine calc_angles(ipsiLF, ithLF)
 	use cfgData
-	use thetaData
+	use angleData
+	use functions
+	use constants
 	implicit none
-	integer			:: iphiLF, ithLF
-	real(kind=dp)	:: p(3)
+	integer						:: ithLF, ipsiLF
+	real(kind=dp),dimension(3)	:: h
 
-	! make rotated solvent vector at origin
-	p(1) = sinPhiLF(iphiLF)*sinThetaLF(ithLF)
-	p(2) = cosPhiLF(iphiLF)*sinThetaLF(ithLF)
-	p(3) = cosThetaLF(ithLF)
+	! make rotated solvent dipole vector at origin
+	h(1) = sinPsiLF(ipsiLF)*sinThetaLF(ithLF)
+	h(2) = -cosPsiLF(ipsiLF)*sinThetaLF(ithLF)
+	h(3) = cosThetaLF(ithLF)
 
-	! calculate cos(theta1) and cos(theta2) relative to lj-spheres 1 and 2.
-	cosTh1 = dot_product(rSolv1, p) / rSolv1n
-	cosTh2 = dot_product(rSolv2, p) / rSolv2n
+	! calculate cos(theta1) and cos(theta2) of the solvent to lj-spheres 1 and 2 respectively.
+	cosTh(1) = dot_product(rSolv1, h) / rSolvn(1)
+	cosTh(2) = dot_product(rSolv2, h) / rSolvn(2)
 
-endsubroutine calc_cosTh
+	tSolv1 = cross_product(rSolv1,h) ! this is (r1 x p) ie. the t vector
+	sSolv1 = cross_product(tSolv1,rSolv1)
+	sSolv1n = norm2(sSolv1)
+
+end subroutine calc_angles
 
 
 ! bilinearly interpolate
 subroutine bilin_interpolate(ihist, fP)
 	use cfgData
 	use histData
-	use thetaData
+	use angleData
 	implicit none
-	integer			:: i, iloop, ihist, ir1, ir2, ic1, ic2
-	real(kind=dp)	:: rSolv(2), cosTh(2), f_index, r1, r2, c1, c2, ra, rb, fP
+	integer			:: i, j, iloop, ihist, ir0, ir1, ic0, ic1
+	real(kind=dp)	:: f_index, r0, r1, c0, c1, rd, cd, f0, f1, fP(3), rSolvnInt(2), cosThInt(2)
 
-	rSolv(1) = rSolv1n
-	rSolv(2) = rSolv2n
-	cosTh(1) = cosTh1
-	cosTh(2) = cosTh2
-	fP = 1_dp
-	if (ihist .eq. 1) then
+	if (g_fit .eq. 'lin') then
+		fP = 1_dp
+	else if (g_fit .eq. 'log') then
+		fP = 0_dp
+	end if
+	if (ihist .eq. 1) then ! for g(r) both particles need to be taken into account
 		iloop = 2
-	else if (ihist .eq. 2) then
+	else if (ihist .eq. 2) then ! for frc(r) only particle 1 needs to be accounted for
 		iloop = 1
-	endif
-	do i = 1, iloop
-		f_index = (rSolv(i) - histDist_step_size) / histDist_step_size + 1.5_dp ! take into account half-bin positions
-		ir1 = floor(f_index) ! get flanking r indicies
-		if (ir1 .ge. histDistBins) then
-			ir1 = histDistBins - 1 ! put larger solvent positon values in the last bin of the histogram
-		else if (ir1 .lt. 1) then
+	end if
+	do i = 1, iloop ! Note: get the bounding values in each dimension.
+		! r
+		f_index = (rSolvn(i)) / histDistStepSize + 0.5_dp ! take into account half-bin positions
+		ir0 = floor(f_index) ! get flanking r indicies
+		if (ir0 .ge. histDistBins) then
+			ir0 = histDistBins
+			ir1 = histDistBins
+		else if (ir0 .lt. 1) then
+			ir0 = 1
 			ir1 = 1
-		endif
-		ir2 = ir1 + 1
+		else
+			ir1 = ir0 + 1
+		end if
+		r0 = histDist(ir0)
 		r1 = histDist(ir1)
-		r2 = histDist(ir2)
+		if ((rSolvn(i) .lt. r0) .or. (rSolvn(i) .gt. r1)) then
+			rSolvnInt(i) = r0 ! when rSolvn is outside the bounds it gets set to r0=r1.
+		else
+			rSolvnInt(i) = rSolvn(i)
+		end if
 
-		f_index = (cosTh(i) - cosTh_min) / histCosTh_step_size + 1_dp ! so index values start at 1
-		ic1 = floor(f_index) ! get flanking cosTh indicies
-		if (ic1 .ge. histCosThBins) then
-			ic1 = histCosThBins - 1
-		else if (ic1 .lt. 1) then
+		! cosTheta
+		f_index = (cosTh(i) - cosTh_min) / histCosThStepSize + 0.5_dp ! so index values start at 1
+		ic0 = floor(f_index) ! get flanking cosTh indicies
+		if (ic0 .ge. histCosThBins) then
+			ic0 = histCosThBins
+			ic1 = histCosThBins
+		else if (ic0 .lt. 1) then
+			ic0 = 1
 			ic1 = 1
-		endif
-		ic2 = ic1 + 1
-		c1 = histAng(ic1)
-		c2 = histAng(ic2)
+		else
+			ic1 = ic0 + 1
+		end if
+		c0 = histCosTh(ic0)
+		c1 = histCosTh(ic1)
+		if ((cosTh(i) .lt. c0) .or. (cosTh(i) .gt. c1)) then
+			cosThInt(i) = c0
+		else
+			cosThInt(i) = cosTh(i)
+		end if
 
-		if (rSolv(i) .gt. r2) then
-			rSolv(i) = r2 ! if the solvent was far away enough to get repositioned to the last bin, set the distance to the last bin
-		endif
-		ra = r2 - rSolv(i)
-		rb = rSolv(i) - r1
+		! Note: set fractional distances
+		if ( ir0 .eq. ir1) then ! if r1=r0 then rd would become a NaN.
+			rd = 1_dp
+		else
+			rd = (rSolvnInt(i)-r0)/(r1-r0)
+		end if
+		if ( ic0 .eq. ic1 ) then ! if c1=c0 then cd would become a NaN.
+			cd = 1_dp
+		else
+			cd = (cosThInt(i)-c0)/(c1-c0)
+		end if
 
-		fP = fP * ( &
-			+ (c2-cosTh(i)) / (c2 - c1) * (ra / (r2 - r1) * hist2D(ihist,ir1,ic1) &
-			+ rb / (r2 - r1) * hist2D(ihist,ir2,ic1)) &
-			+ (cosTh(i)-c1) / (c2 - c1) * (ra / (r2 - r1) * hist2D(ihist,ir1,ic2) &
-			+ rb / (r2 - r1) * hist2D(ihist,ir2,ic2)) )
-	enddo
+		f0 = hist2D(ihist,ir0,ic0)*(1-rd) + hist2D(ihist,ir1,ic0)*rd
+		f1 = hist2D(ihist,ir0,ic1)*(1-rd) + hist2D(ihist,ir1,ic1)*rd
 
-endsubroutine bilin_interpolate
+		if (g_fit .eq. 'lin') then
+			fP(1) = fP(1) * (f0*(1-cd) + f1*cd) ! forces are additive but g(r) is multiplicative.
+		else if (g_fit .eq. 'log') then
+			fP(1) = fP(1) + (f0*(1-cd) + f1*cd) ! forces are additive and FE is additive.
+		end if
+
+		if (ihist .eq. 2) then ! it's a force calculation
+			do j = 3, 3
+				f0 = hist2D(j,ir0,ic0)*(1-rd) + hist2D(j,ir1,ic0)*rd
+				f1 = hist2D(j,ir0,ic1)*(1-rd) + hist2D(j,ir1,ic1)*rd
+
+				if (g_fit .eq. 'lin') then
+					fP(j-1) = fP(j-1) * (f0*(1-cd) + f1*cd) ! forces are additive and FE is additive.
+				else if (g_fit .eq. 'log') then
+					fP(j-1) = fP(j-1) + (f0*(1-cd) + f1*cd) ! forces are additive and FE is additive.
+				end if
+			end do
+		end if
+	end do
+
+end subroutine bilin_interpolate
 
 
 ! integrate the average force from 'compute_avg_force' to get the PMF.
 subroutine integrate_force
 	use cfgData
+	use ctrlData
 	implicit none
 	integer 		:: d
 
-	allocate( u_dir(num_R_bins) )
+	allocate( u_dir(cfgRBins) )
 	u_dir = 0_dp
 
-	do d = 1, num_R_bins
-		if (d .eq. 1) then
-			u_dir(num_R_bins) = fAvg(num_R_bins) * R_step_size
-		else
-			u_dir(num_R_bins-(d-1)) = u_dir(num_R_bins-(d-2)) + fAvg(num_R_bins-(d-1)) * R_step_size
-		endif
-	enddo
+	if (explicit_R .eqv. .false.) then
+		do d = 1, cfgRBins
+			if (d .eq. 1) then
+				u_dir(cfgRBins) = fAvg(cfgRBins) * RStepSize
+			else
+				u_dir(cfgRBins-(d-1)) = u_dir(cfgRBins-(d-2)) + fAvg(cfgRBins-(d-1)) * RStepSize
+			end if
+		end do
+	else if (explicit_R .eqv. .true.) then
+		do d = 1, cfgRBins
+			if (d .eq. 1) then
+				u_dir(cfgRBins) = fAvg(cfgRBins) * (R_axis(cfgRBins)-R_axis(cfgRBins-1))
+				print*, (R_axis(cfgRBins)-R_axis(cfgRBins-1))
+			else
+				! FIXME: is the delta R part of this correct?
+				u_dir(cfgRBins-(d-1)) = u_dir(cfgRBins-(d-2)) + fAvg(cfgRBins-(d-1)) * &
+					(R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
+				! it looks like the first value is getting printed twice. Also, the values might be wrong. Should it be (d-1) and
+				! (d-0)? instead of -2 and -1?
+				print*, (R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
+			end if
+		end do
+	end if
 
-endsubroutine integrate_force
+end subroutine integrate_force
 
 
 ! write force out and g(r) out to compare against explicit
-subroutine write_test_out(i_f, num_x_bins, num_z_bins)
+subroutine write_test_out(i_f, xBins, zBins)
 	use cfgData
 	use ctrlData
 	implicit none
-	integer				:: i_f, i, j, num_x_bins, num_z_bins
+	integer				:: i_f, i, j, xBins, zBins
 	character(len=32)	:: temp, filename
 	character(len=8)	:: frmt
 
@@ -632,19 +727,20 @@ subroutine write_test_out(i_f, num_x_bins, num_z_bins)
 	write(35,*) "# 1.	X Distance"
 	write(35,*) "# 2.	Z Distance"
 	write(35,*) "# 3.	g(r)"
-	write(35,*) "# 4.	Force"
-	do i = 1, num_x_bins
-		do j = 1, num_z_bins
-			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(i,j)
-		enddo
-	enddo
+	write(35,*) "# 4.	Force.r"
+	write(35,*) "# 5.	Force.s"
+	do j = 1, zBins
+		do i = 1, xBins
+			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(1,i,j), frcSPA(2,i,j)
+		end do
+	end do
 	close(35)
 
 	flush(6)
 	
-898		format (4(1x,es14.7))
+898		format (5(1x,es14.7))
 
-endsubroutine write_test_out
+end subroutine write_test_out
 
 
 ! write output file
@@ -659,13 +755,13 @@ subroutine write_output(outFile)
 	write(35,*) "# 1.	R Distance"
 	write(35,*) "# 2.	Avg Force"
 	write(35,*) "# 3.	PMF"
-	do r = 1, num_R_bins
+	do r = 1, cfgRBins
 		write(35,899) R_axis(r), fAvg(r), u_dir(r)
-	enddo
+	end do
 	close(35)
 
 	flush(6)
 
 899		format (3(1x,es14.7)) ! scientific format
 
-endsubroutine write_output
+end subroutine write_output
