@@ -10,6 +10,7 @@
 !						|/
 !		<_______O_______|_______O_______>
 !		-x		1				2	+x
+!					<-----R
 !
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -301,7 +302,7 @@ subroutine make_hist_table(histFile)
 		end if
 	end do
 	close(20)
-	print*, "nHistLines", nHistLines
+	!write(*,*) "nHistLines", nHistLines
 
 	allocate( histTmp(7,nHistLines) )
 
@@ -528,14 +529,14 @@ subroutine compute_avg_force
 		frcSPA = 0_dp; grSPA = 0_dp
 		do i = 1, xBins ! full length of cylinder
 			do j = 1, zBins ! top half of bisecting plane of cylinder
-				rSolv1(1) = x_axis(i)+R_axis(r)/2_dp
+				rSolv1(1) = -R_axis(r)/2_dp - x_axis(i)
 				rSolv1(2) = 0_dp
-				rSolv1(3) = z_axis(j)
+				rSolv1(3) = -z_axis(j)
 				rSolvn(1) = norm2(rSolv1)
 
-				rSolv2(1) = x_axis(i)-R_axis(r)/2_dp
+				rSolv2(1) = R_axis(r)/2_dp - x_axis(i)
 				rSolv2(2) = 0_dp
-				rSolv2(3) = z_axis(j)
+				rSolv2(3) = -z_axis(j)
 				rSolvn(2) = norm2(rSolv2)
 
 				! loop through orientations of solvent at x(i) and z(j)
@@ -555,11 +556,11 @@ subroutine compute_avg_force
 							if (gx(1) .gt. 1d-6) then ! if gx(1) == 0 then don't waste time with the rest of the calculation
 								call trilin_interpolate(2, fx) ! 2 is the index for the frc(r,cos,phi)
 
-								fNew1 = gx(1) * fx(1) * rSolv1(1)/rSolvn(1) ! f*g.x^{hat} for r
-								fNew2 = gx(1) * fx(2) * (sSolv1(1)/sSolv1n) ! f*g.x^{hat} for s
-								fNew3 = gx(1) * fx(3) * (tSolv1(1)/tSolv1n) ! f*g.x^{hat} for t
+								fNew1 = gx(1) * fx(1) * (-rSolv1(1)/rSolvn(1))	! f*g.R^{hat} for r
+								fNew2 = gx(1) * fx(2) * (-sSolv1(1)/sSolv1n)	! f*g.R^{hat} for s
+								fNew3 = gx(1) * fx(3) * (-tSolv1(1)/tSolv1n)	! f*g.R^{hat} for t
 
-								fAvg(r) = fAvg(r) + ((fNew1 + fNew2 + fNew3) * z_axis(j)) ! note: added r here instead of in fNew
+								fAvg(r) = fAvg(r) + ((fNew1 + fNew2 + fNew3) * z_axis(j)) ! note: added radial distance here instead of in fNew
 
 								frcSPA(1,i,j) = frcSPA(1,i,j) + fNew1
 								frcSPA(2,i,j) = frcSPA(2,i,j) + fNew2
@@ -582,9 +583,9 @@ subroutine compute_avg_force
 		end do !x again
 		call write_test_out(r, xBins, zBins) ! write grSPA and frcSPA arrays
 
-		! NOTE : After the fact multiply all elements by 2*pi*density/4/pi (4pi steradians from orientations)
+		! NOTE : After the fact multiply all elements by 2*pi*density/8/pi/pi (2*2pi*pi/3 (4pi**2)/3 steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)/2_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPhiStepSize*cfgPsiStepSize
+		fAvg(r) = fAvg(r)/4_dp/pi*3_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPhiStepSize*cfgPsiStepSize
 	end do !r
 
 end subroutine compute_avg_force
@@ -810,14 +811,14 @@ subroutine integrate_force
 		do d = 1, cfgRBins
 			if (d .eq. 1) then
 				u_dir(cfgRBins) = fAvg(cfgRBins) * (R_axis(cfgRBins)-R_axis(cfgRBins-1))
-				print*, (R_axis(cfgRBins)-R_axis(cfgRBins-1))
+				!print*, (R_axis(cfgRBins)-R_axis(cfgRBins-1))
 			else
 				! FIXME: is the delta R part of this correct?
 				u_dir(cfgRBins-(d-1)) = u_dir(cfgRBins-(d-2)) + fAvg(cfgRBins-(d-1)) * &
 					(R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
 				! it looks like the first value is getting printed twice. Also, the values might be wrong. Should it be (d-1) and
 				! (d-0)? instead of -2 and -1?
-				print*, (R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
+				!print*, (R_axis(cfgRBins-(d-1))-R_axis(cfgRBins-d))
 			end if
 		end do
 	end if
@@ -826,14 +827,15 @@ end subroutine integrate_force
 
 
 ! write force out and g(r) out to compare against explicit
-subroutine write_test_out(i_f, xBins, zBins)
+subroutine write_test_out(r, xBins, zBins)
 	use cfgData
 	use ctrlData
 	implicit none
-	integer				:: i_f, i, j, xBins, zBins
+	integer				:: r, i_f, i, j, xBins, zBins
 	character(len=32)	:: temp, filename
 	character(len=8)	:: frmt
 
+	i_f = (r-1) * int(RStepSize*10)
 	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
 	write(temp,frmt) i_f ! converting integer to string using 'internal file'
 	filename='hist3D_output.'//trim(temp)//'.dat'
