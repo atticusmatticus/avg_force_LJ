@@ -258,11 +258,12 @@ subroutine initial_geom
 		Alj(i) = AljCl
 		Blj(i) = BljCl
 	end do
-	print*, pos_i(1,:)
-	print*, pos_i(2,:)
-	print*, pos_i(3,:)
-	print*, pos_i(4,:)
-	print*, pos_i(5,:)
+
+	!write(45,*) '1', pos_i(1,:)
+	!write(45,*) '2', pos_i(2,:)
+	!write(45,*) '3', pos_i(3,:)
+	!write(45,*) '3', pos_i(4,:)
+	!write(45,*) '3', pos_i(5,:)
 	print*, dacos(dot_product(pos_i(1,:),pos_i(3,:))/norm2(pos_i(1,:))/norm2(pos_i(3,:)))
 	print*, dacos(dot_product(pos_i(1,:),pos_i(4,:))/norm2(pos_i(1,:))/norm2(pos_i(4,:)))
 	print*, dacos(dot_product(pos_i(1,:),pos_i(5,:))/norm2(pos_i(1,:))/norm2(pos_i(5,:)))
@@ -323,26 +324,32 @@ subroutine compute_force_hist
 	flush(6)
 
 	! Calculate the average force integral for top half of bisecting plane of cylinder
-	r_vec = [0_dp,-1_dp,0_dp]
+	!r_vec = [0_dp,-1_dp,0_dp] ! XXX: why does this point negative?
 	do ith = 1, cfgCosThBins
 		do iphi = 1, cfgPhiBins
 			! rotate initial geom
 			do i = 1, nAtoms
-				pos_r(i,:) = rotate_x(theta(ith), rotate_y(phi(iphi),pos_i(i,:)))
+				pos_r(i,:) = rotate_x( theta(ith), rotate_y( phi(iphi), pos_i(i,:) ) )
 			end do
-			t_vec = cross_product(r_vec, pos_r(1,:))
-			t_vec = t_vec / norm2(t_vec)
-			s_vec = cross_product(t_vec, r_vec)
-			pos_t = pos_r ! the position vector that will be translated
 			do ir = 1, rBins
+				! set the vector to be translated as the rotated vector at the origin, then translate in the y dimension
+				pos_t = pos_r
+				! translate each solvent atom along y
+				do i = 1, nAtoms
+					pos_t(i,2) = pos_r(i,2) + rAxis(ir)
+				end do !i atoms
+				r_vec = [0_dp,0_dp,0_dp] - pos_t(2,:)
+				r_vec = r_vec / norm2(r_vec)
+				t_vec = cross_product(r_vec, (pos_t(1,:)-pos_t(2,:)))
+				t_vec = t_vec / norm2(t_vec)
+				s_vec = cross_product(t_vec, r_vec)
+				s_vec = s_vec / norm2(s_vec)
+				! force calculation
 				force_vec = 0_dp
 				do i = 1, nAtoms
-					! translate along y
-					pos_t(i,2) = pos_r(i,2) + rAxis(ir)
-					! force calculation
-					force_vec = force_vec + lj_force(i, pos_t(i,:))
-				end do !i atoms
-				frcHist(1,ir,ith,iphi) = force_vec(2)					! <f.r>
+					force_vec = force_vec - lj_force(i, pos_t(i,:))
+				end do
+				frcHist(1,ir,ith,iphi) = dot_product(force_vec, r_vec)	! <f.r>
 				frcHist(2,ir,ith,iphi) = dot_product(force_vec, s_vec)	! <f.s>
 				frcHist(3,ir,ith,iphi) = dot_product(force_vec, t_vec)	! <f.t>
 				! XXX: plot positions instead for troubleshooting 
@@ -397,7 +404,7 @@ subroutine write_output(outFile)
 	do i = 1, rBins
 		do j = 1, cfgCosThBins
 			do k = 1, cfgPhiBins
-				write(35,899) rAxis(i), cos(theta(j)), phi(k), frcHist(1,i,j,k), frcHist(2,i,j,k), frcHist(3,i,j,k)!,&
+				write(35,899) rAxis(i), dcos(theta(j)), phi(k), frcHist(1,i,j,k), frcHist(2,i,j,k), frcHist(3,i,j,k)!,&
 				!&frcHist(4,i,j,k), frcHist(5,i,j,k), frcHist(6,i,j,k), frcHist(7,i,j,k), frcHist(8,i,j,k), frcHist(9,i,j,k),&
 				!&frcHist(10,i,j,k)
 			end do
