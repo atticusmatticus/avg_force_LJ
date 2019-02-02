@@ -500,51 +500,6 @@ find:		do ir = 1, histDistBins
 	allocate( g2(histDistBins,histCosThBins,histPhiBins), fr2(histDistBins,histCosThBins,histPhiBins), & 
 		& fs2(histDistBins,histCosThBins,histPhiBins), ft2(histDistBins,histCosThBins,histPhiBins) )
 
-	! todo: edited g and g2
-	open(45)
-	write(45,*) '# just g and its second derivatives'
-	do ith = 1, histcosthbins
-		do iphi = 1, histphibins
-			! spline the g array from the last point (largest r) to hit -10^4, to the last point. the ispline array holds the indecies
-			! of that last point to hit -10^4. The derivative of g at that point should be roughly the ideal force at that index:
-			! idealHist(2, ...).
-			call spline(histDist,g(:,ith,iphi),ispline(ith,iphi),histDistBins,idealHist(2,ispline(ith,iphi),ith,iphi),dble(0),g2(:,ith,iphi))
-			do ir = 1, histdistbins
-				write(45,*) histDist(ir), histcosth(ith), histphi(iphi), gc(ir,ith,iphi)/4/pi/histDist(ir)**2/norm_factor, &
-					& g(ir,ith,iphi), g2(ir,ith,iphi), gc(ir,ith,iphi)
-			end do
-		end do
-	end do
-	close(45)
-
-	! todo: test interpolation 
-	open(55)
-	write(55,*) '# test interpolation of g'
-	do ith = 22, 22!histcosthbins
-		do iphi = 1, 1!histphibins
-			do i = 1, 2500
-				x = i*histDistStepSize/10_dp
-				call splint(histDist,g(:,ith,iphi),g2(:,ith,iphi),histDistBins,x,y)
-				!print*, x, y
-				write(55,*) x, histcosth(ith), histphi(iphi), y
-			end do
-		end do
-	end do
-	close(55)
-
-	! todo: write out ideal hist to make sure it's okay.
-	open(65)
-	write(65,*) '# test idealhist output'
-	do ith = 22, 22!histcosthbins
-		do iphi = 1, 1!histphibins
-			do ir = 1, histdistbins
-				write(65,*) histdist(ir), histcosth(ith), histphi(iphi), idealHist(1,ir,ith,iphi), idealHist(2,ir,ith,iphi), &
-					& idealHist(3,ir,ith,iphi), idealHist(4,ir,ith,iphi)
-			end do
-		end do
-	end do
-	close(65)
-
 end subroutine spline_hist_array
 
 
@@ -590,11 +545,9 @@ subroutine set_tmp_arrays
 	use functions
 	implicit none
 	integer			:: j, k
-!	real(kind=dp)	:: x1a(0:histCosThBins+1), x2a(0:histPhiBins+1) !debug
-!	integer	:: t1,t2 !debug
 
-	! todo: Evaluate the splines for every theta,phi point at these distances and save those arrays at gTmp1, gTmp2, and fTmp1. The
-	! numbers refer to which solute they correpsond to. These arrays are saved and used until the next distance bin.
+	! Evaluate the splines for every theta,phi point at these distances and save those arrays at gTmp1, gTmp2, frTmp1, fsTmp1,
+	! ftTmp1. The numbers refer to which solute they correpsond to. These arrays are saved and used until the next distance bin.
 	do j = 1, histCosThBins
 		do k = 1, histPhiBins
 			if ((rSolvn(1).gt.histDist(histDistBins)).and.(rSolvn(2).gt.histDist(histDistBins))) then
@@ -624,16 +577,7 @@ subroutine set_tmp_arrays
 			end if
 		end do
 	end do
-	! todo: calculate derivatives and store them in the tmp arrays
-	! make independent variable arrays that have the extra 2 elements for taking derivatives.
-	!debug these axes (x1a and x2a) arent needed outside of debugging purposes.
-!	x1a(1:histCosThBins) = histCosTh(:)
-!	x1a(0) = histCosTh(1)
-!	x1a(histCosThBins+1) = histCosTh(histCosThBins)
-!	x2a(1:histPhiBins) = histPhi(:)
-!	x2a(0) = histPhi(1)
-!	x2a(histPhiBins+1) = histPhi(histPhiBins)
-	! xxx: Wrap g values first before calculating derivatives.
+	! Note: Wrap g values first before calculating derivatives.
 	! Wrap all 4 corners
 	gTmp1(1,0,0) = gTmp1(1,1,1)
 	gTmp1(1,histCosThBins+1,0) = gTmp1(1,histCosThBins,1)
@@ -833,16 +777,6 @@ subroutine set_tmp_arrays
 	ftTmp1(4,1:histCosThBins , 0) = -ftTmp1(4,1:histCosThBins , 1)
 	ftTmp1(4,1:histCosThBins , histPhiBins+1) = -ftTmp1(4,1:histCosThBins , histPhiBins)
 
-
-	! debug: this whole write statement is for debugging
-!	open(75)
-!	do t1 = 0, histCosThBins+1
-!		do t2 = 0, histPhiBins+1
-!			write(75,*) x1a(t1), x2a(t2), gTmp1(1,t1,t2), gTmp1(2,t1,t2), gTmp1(3,t1,t2), gTmp1(4,t1,t2)
-!		end do
-!	end do
-!	close(75)
-
 end subroutine set_tmp_arrays
 
 
@@ -941,18 +875,9 @@ subroutine compute_avg_force
 	implicit none
 	integer			:: r, i, j, ip, ithLF, iphiLF, ipsiLF
 	real(kind=dp)	:: gx, gx2, fx(3)
-	integer	:: omp_get_thread_num, tid, t1, t2 !debug
-	real(kind=dp)	:: x1a(0:histCosThBins+1), x2a(0:histPhiBins+1)	!debug
 
 	write(*,*) "Computing average force..."
 	flush(6)
-	!debug
-	x1a(1:histCosThBins) = histCosTh(:)
-	x1a(0) = histCosTh(1)
-	x1a(histCosThBins+1) = histCosTh(histCosThBins)
-	x2a(1:histPhiBins) = histPhi(:)
-	x2a(0) = histPhi(1)
-	x2a(histPhiBins+1) = histPhi(histPhiBins)
 
 	! Note: until I find a better way to do this. This is how I will allocate the Tmp arrays.
 	!$omp PARALLEL DEFAULT( none ) SHARED( histCosThBins, histPhiBins )
@@ -970,9 +895,6 @@ subroutine compute_avg_force
 		!$omp PRIVATE( ip, i, j, ithLF, iphiLF, ipsiLF, gx, gx2, fx, tid ) &
 		!$omp SHARED( r, xBins, zBins, cut, R_axis, x_axis, z_axis, cfgCosThBins, cfgPhiBins, cfgPsiBins, histCosTh, histPhi, &
 		!$omp&	histCosThBins, histPhiBins, histCosThStepSize, histPhiStepSize, cosTh_min, phi_min, frcSPA, grSPA, x1a, x2a )
-		tid = omp_get_thread_num()	!debug
-		print*, 'test', tid, histCosThBins, histPhiBins, size(gTmp1)
-		flush(6)
 		!$omp DO SCHEDULE( guided )
 		do ip = 1, (xBins*zBins)
 			! Convert single index 'ip' to the x and z indicies 'i' and 'j' respectively.
@@ -1003,12 +925,7 @@ subroutine compute_avg_force
 								& phi_min,gTmp1,cosTh(1),phi(1), gx) ! solute 1
 							call bicubic_int(cut,histCosTh,histPhi,histCosThBins,histPhiBins,histCosThStepSize,histPhiStepSize,cosTh_min,&
 								& phi_min,gTmp2,cosTh(2),phi(2), gx2) ! solute 2
-							!write(77,*) cosTh(1), phi(1), gx, gx2!debug
-							!if ((gx.gt.log(10.000000000000)).or.(gx2.gt.log(10.000000000000))) then	!debug
-								!write(77,*) tid, cosTh(1), phi(1), gx, costh(2), phi(2), gx2
-							!end if
 							gx = exp(gx+gx2)
-							!write(77,*) tid, gx!debug
 						end if
 
 						if (gx .gt. 1d-6) then ! if gx == 0 then don't waste time with the rest of the calculation
@@ -1027,17 +944,6 @@ subroutine compute_avg_force
 					end do !psi
 				end do !phi
 			end do !theta
-			if (grSPA(i,j)/cfgCosThBins/cfgPhiBins/cfgPsiBins.gt.10) then	!debug this whole if statement
-				print*, tid, i,j, grSPA(i,j)/cfgCosThBins/cfgPhiBins/cfgPsiBins
-				open(75)
-				write(75,*) '#', tid, i, j, grSPA(i,j)/cfgCosThBins/cfgPhiBins/cfgPsiBins
-				do t1 = 0, histCosThBins+1
-					do t2 = 0, histPhiBins+1
-						write(75,*) x1a(t1), x2a(t2), gTmp1(1,t1,t2), gTmp1(2,t1,t2), gTmp1(3,t1,t2), gTmp1(4,t1,t2)
-					end do
-				end do
-				close(75)
-			end if
 		end do !ip
 		!$omp END DO
 		!$omp END PARALLEL
