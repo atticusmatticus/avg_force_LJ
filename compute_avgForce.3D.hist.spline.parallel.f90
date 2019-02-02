@@ -892,9 +892,9 @@ subroutine compute_avg_force
 	do r = 1, cfgRBins ! loop lj--lj distances
 		frcSPA = 0_dp; grSPA = 0_dp
 		!$omp PARALLEL DEFAULT( none ) &
-		!$omp PRIVATE( ip, i, j, ithLF, iphiLF, ipsiLF, gx, gx2, fx, tid ) &
+		!$omp PRIVATE( ip, i, j, ithLF, iphiLF, ipsiLF, gx, gx2, fx ) &
 		!$omp SHARED( r, xBins, zBins, cut, R_axis, x_axis, z_axis, cfgCosThBins, cfgPhiBins, cfgPsiBins, histCosTh, histPhi, &
-		!$omp&	histCosThBins, histPhiBins, histCosThStepSize, histPhiStepSize, cosTh_min, phi_min, frcSPA, grSPA, x1a, x2a )
+		!$omp&	histCosThBins, histPhiBins, histCosThStepSize, histPhiStepSize, cosTh_min, phi_min, frcSPA, grSPA )
 		!$omp DO SCHEDULE( guided )
 		do ip = 1, (xBins*zBins)
 			! Convert single index 'ip' to the x and z indicies 'i' and 'j' respectively.
