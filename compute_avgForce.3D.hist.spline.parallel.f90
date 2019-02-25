@@ -1,6 +1,5 @@
 ! USAGE: ./this_file.x -cfg [CONFIGURATION FILE] -hist [3D HIST FILE]
 !
-! using 2D histrograms of spherically binned ie. g(r,cos(th)) for both PDF and Force
 !
 !					    ^
 !					   z|
@@ -21,7 +20,7 @@
 module histData
 	use prec
 	real(kind=dp),allocatable	:: histDist(:), histCosTh(:), histPhi(:), g(:,:,:), fr(:,:,:), fs(:,:,:), ft(:,:,:), g2(:,:,:), &
-		& fr2(:,:,:), fs2(:,:,:), ft2(:,:,:), idealHist(:,:,:,:), gc(:,:,:), gTmp1(:,:,:), gTmp2(:,:,:), frTmp1(:,:,:), &
+		& fr2(:,:,:), fs2(:,:,:), ft2(:,:,:), gc(:,:,:), gTmp1(:,:,:), gTmp2(:,:,:), frTmp1(:,:,:), &
 		& fsTmp1(:,:,:), ftTmp1(:,:,:)
 	real(kind=dp)	:: histDistStepSize, histCosThStepSize, histPhiStepSize
 	integer	:: histDistBins, histCosThBins, histPhiBins
@@ -134,13 +133,15 @@ end program compute_avgForce
 ! parse commandline for relevant files.
 subroutine parse_command_line(histFile, cfgFile) !,outFile)
 	implicit none
-	character(len=64) 	:: histFile, cfgFile !, outFile
-	character(len=16) 	:: arg
-	integer 			:: i
-	logical 			:: histFileFlag, cfgFileFlag !, outFileFlag
+	character(len=64)	:: histFile, cfgFile !, outFile
+	character(len=16)	:: arg
+	integer				:: i
+	logical				:: histFileFlag, cfgFileFlag, histExist, cfgExist
 
 	histFileFlag = .false.
 	cfgFileFlag = .false.
+	histExist = .false.
+	cfgExist = .false.
 	i=1
 	do
 		call get_command_argument(i,arg)
@@ -150,12 +151,16 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
 			i = i+1
 			call get_command_argument(i,histFile)
 			histFileFlag=.true.
-			write(*,*) "Histogram File:			", histFile
+			INQUIRE(FILE=histFile, EXIST=histExist)
+			write(*,*) 'Histogram File:			', histFile
+			write(*,*) 'Histogram File Exists:			', histExist
 		case ('-cfg')
 			i = i+1
 			call get_command_argument(i,cfgFile)
 			cfgFileFlag=.true.
-			write(*,*) "Config File:				", cfgFile
+			INQUIRE(FILE=cfgFile, EXIST=cfgExist)
+			write(*,*) 'Config File:				', cfgFile
+			write(*,*) 'Config File Exists:			', cfgExist
 		case default
 			write(*,*) 'Unrecognized command-line option: ', arg
 			write(*,*) 'Usage: compute_avgForce.x -hist [hist file]'
@@ -175,6 +180,12 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
 	if (cfgFileFlag.eqv..false.) then
 		write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
 		stop
+	end if
+
+	! 'ERROR STOP' if either file doesn't exist
+	if ((histExist.eqv..false.).or.(cfgExist.eqv..false.)) then
+		write(*,*) 'hist or cfg files do not exist'
+		error stop
 	end if
 
 	flush(6)
@@ -438,11 +449,12 @@ subroutine spline_hist_array
 	use cfgData
 	use idealSolv
 	implicit none
-	integer			:: i, ir, ith, iphi, imin, igo
-	real(kind=dp)	:: x, y, norm_factor
+	integer							:: i, ir, ith, iphi, imin, igo
+	real(kind=dp)					:: x, y, norm_factor
+	real(kind=dp),allocatable	:: idealHist(:,:,:,:)
 
 	! Calculate a 4D array idealHist(g/f,r,th,phi)
-	allocate( idealHist(4,histDistBins,histCosThBins,histPhiBins), ispline(histCosThBins,histPhiBins) )
+	allocate( idealHist(7,histDistBins,histCosThBins,histPhiBins), ispline(histCosThBins,histPhiBins) )
 	idealHist = 0_dp; ispline = 0_dp
 	call ideal_CL3(histDistBins,histDistStepSize,histCosThBins,cosTh_min,cosTh_max,histPhiBins,phi_min,phi_hmax, idealHist)
 
@@ -472,25 +484,26 @@ find:		do ir = 1, histDistBins
 						fs(ir,ith,iphi) = idealHist(3,ir,ith,iphi)
 						ft(ir,ith,iphi) = idealHist(4,ir,ith,iphi)
 					end if
-				else if (ir.lt.imin) then ! .lt.imin ==> in the region of no sampling.
-					! log(g(r<r0)) = -u_dir(r)/T - ( u_pmf(r0)/T - u_dir(r0)/T )
-					! log(g(r<r0)) = -u_dir(r)/T + log(g(r0)) - u_dir(r0)/T
+				else if (ir.lt.imin) then ! .lt.imin ==> in the region of no sampling. Set the FE (lng) to the direct energy shifted by
+					! a constant energy term , which is the last sampled indirect energy.
+					! ln(g(r<r0)) = -u_dir(r)/T - ( u_pmf(r0)/T - u_dir(r0)/T )
+					! ln(g(r<r0)) = -u_dir(r)/T + ln(g(r0)) - u_dir(r0)/T
 					g(ir,ith,iphi) = ( -idealHist(1,ir,ith,iphi) + idealHist(1,imin,ith,iphi) )/kb_kcalmolK/T + g(imin,ith,iphi)
-					if ((g(ir,ith,iphi).lt.-1d4).and.(igo.eq.0)) then
+					if ((g(ir,ith,iphi).lt.cut).and.(igo.eq.0)) then ! the largest r to go past the cutoff
 						ispline(ith,iphi) = ir
 						igo = 1
 					end if
 					fr(ir,ith,iphi) = idealHist(2,ir,ith,iphi)
-					if (fr(ir,ith,iphi).gt.1d4) then
-						fr(ir,ith,iphi) = 1d4
+					if (fr(ir,ith,iphi).gt.-cut) then
+						fr(ir,ith,iphi) = -cut
 					end if
 					fs(ir,ith,iphi) = idealHist(3,ir,ith,iphi)
-					if (fs(ir,ith,iphi).gt.1d4) then
-						fs(ir,ith,iphi) = 1d4
+					if (fs(ir,ith,iphi).gt.-cut) then
+						fs(ir,ith,iphi) = -cut
 					end if
 					ft(ir,ith,iphi) = idealHist(4,ir,ith,iphi)
-					if (ft(ir,ith,iphi).gt.1d4) then
-						ft(ir,ith,iphi) = 1d4
+					if (ft(ir,ith,iphi).gt.-cut) then
+						ft(ir,ith,iphi) = -cut
 					end if
 				end if
 			end do
@@ -499,6 +512,21 @@ find:		do ir = 1, histDistBins
 
 	allocate( g2(histDistBins,histCosThBins,histPhiBins), fr2(histDistBins,histCosThBins,histPhiBins), & 
 		& fs2(histDistBins,histCosThBins,histPhiBins), ft2(histDistBins,histCosThBins,histPhiBins) )
+	g2 = 0_dp; fr2 = 0_dp; fs2 = 0_dp; ft2 = 0_dp
+
+	! Spline the g and force arrays using ideal values for the slopes at small r. This populates the second derivative arrays.
+	do ith = 1, histCosThBins
+		do iphi = 1, histPhiBins
+			call spline(histDist,g(:,ith,iphi),ispline(ith,iphi),histDistBins,idealHist(2,ispline(ith,iphi),ith,iphi),dble(0), &
+				& g2(:,ith,iphi))
+			call spline(histDist,fr(:,ith,iphi),ispline(ith,iphi),histDistBins,idealHist(5,ispline(ith,iphi),ith,iphi),dble(0), &
+				& fr2(:,ith,iphi))
+			call spline(histDist,fs(:,ith,iphi),ispline(ith,iphi),histDistBins,idealHist(6,ispline(ith,iphi),ith,iphi),dble(0), &
+				& fs2(:,ith,iphi))
+			call spline(histDist,ft(:,ith,iphi),ispline(ith,iphi),histDistBins,idealHist(7,ispline(ith,iphi),ith,iphi),dble(0), &
+				& ft2(:,ith,iphi))
+		end do
+	end do
 
 end subroutine spline_hist_array
 
@@ -839,7 +867,7 @@ subroutine setup_compute_avg_force
 		cosThetaLF(i) = (i-0.5_dp)*cfgCosThStepSize - cosTh_max
 		sinThetaLF(i) = sqrt(abs(1_dp-cosThetaLF(i)**2))
 	end do
-	write(*,*) "Config Cos(Theta) Step Size: ", cfgCosThStepSize
+	write(*,*) "Config Cos(Theta) Step Size:		", cfgCosThStepSize
 
 	! Phi
 	! twist about z
@@ -849,7 +877,7 @@ subroutine setup_compute_avg_force
 		sinPhiLF(i) = sin(phiLF)
 		cosPhiLF(i) = cos(phiLF)
 	end do
-	write(*,*) "Config Phi Step Size: ", cfgPhiStepSize
+	write(*,*) "Config Phi Step Size:			", cfgPhiStepSize
 
 	! Psi
 	! processison about z
@@ -859,7 +887,7 @@ subroutine setup_compute_avg_force
 		sinPsiLF(i) = sin(psiLF)
 		cosPsiLF(i) = cos(psiLF)
 	end do
-	write(*,*) "Config Psi Step Size: ", cfgPsiStepSize
+	write(*,*) "Config Psi Step Size:			", cfgPsiStepSize
 
 end subroutine setup_compute_avg_force
 
@@ -873,14 +901,14 @@ subroutine compute_avg_force
 	use constants
 	use functions
 	implicit none
-	integer			:: r, i, j, ip, ithLF, iphiLF, ipsiLF
+	integer			:: r, i, j, ip, ithLF, iphiLF, ipsiLF, tid, omp_get_thread_num, omp_get_num_threads
 	real(kind=dp)	:: gx, gx2, fx(3)
 
 	write(*,*) "Computing average force..."
 	flush(6)
 
 	! Note: until I find a better way to do this. This is how I will allocate the Tmp arrays.
-	!$omp PARALLEL DEFAULT( none ) SHARED( histCosThBins, histPhiBins )
+	!$omp PARALLEL DEFAULT( none ) PRIVATE( tid ) SHARED( histCosThBins, histPhiBins )
 	! Allocate temporary wrapped angular arrays for bicubic interpolation here because they are THREADPRIVATE and need to be
 	! allocated for each cpu. The first index determines whether it's the f(x);df/dx1;df/dx2;d2f/dx1dx2.
 	allocate( gTmp1(4,0:histCosThBins+1,0:histPhiBins+1), gTmp2(4,0:histCosThBins+1,0:histPhiBins+1), &
@@ -895,6 +923,11 @@ subroutine compute_avg_force
 		!$omp PRIVATE( ip, i, j, ithLF, iphiLF, ipsiLF, gx, gx2, fx ) &
 		!$omp SHARED( r, xBins, zBins, cut, R_axis, x_axis, z_axis, cfgCosThBins, cfgPhiBins, cfgPsiBins, histCosTh, histPhi, &
 		!$omp&	histCosThBins, histPhiBins, histCosThStepSize, histPhiStepSize, cosTh_min, phi_min, frcSPA, grSPA )
+		!!$omp	NUM_THREADS( 1 )
+		if ((omp_get_thread_num().eq.0).and.(r.eq.1)) then
+			write(*,*) 'Parallel CPUs:			', omp_get_num_threads()
+			flush(6)
+		end if
 		!$omp DO SCHEDULE( guided )
 		do ip = 1, (xBins*zBins)
 			! Convert single index 'ip' to the x and z indicies 'i' and 'j' respectively.
