@@ -20,11 +20,12 @@
 module histData
 	use prec
 	real(kind=dp),allocatable	:: histDist(:), histCosTh(:), histPhi(:), g(:,:,:), fr(:,:,:), fs(:,:,:), ft(:,:,:), g2(:,:), &
-		& fr2(:,:), fs2(:,:), gc(:,:,:), gTmp1(:,:,:), gTmp2(:,:,:), frTmp1(:,:,:), fsTmp1(:,:,:), ftTmp1(:,:,:)
+		& fr2(:,:), fs2(:,:), gc(:,:,:), gTmp1(:,:), gTmp2(:,:), frTmp1(:,:), fsTmp1(:,:)
+	real(kind=dp),allocatable	:: g2D(:,:), fr2D(:,:), fs2D(:,:), g2D2(:,:), fr2D2(:,:), fs2D2(:,:)
 	real(kind=dp)	:: histDistStepSize, histCosThStepSize, histPhiStepSize
 	integer	:: histDistBins, histCosThBins, histPhiBins
 
-	!$omp THREADPRIVATE( gTmp1, gTmp2, frTmp1, fsTmp1, ftTmp1 )
+	!$omp THREADPRIVATE( gTmp1, gTmp2, frTmp1, fsTmp1 )
 
 end module histData
 
@@ -33,9 +34,9 @@ module cfgData
 	use prec
 	use constants
 	real(kind=dp),allocatable :: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
-	real(kind=dp) :: RStepSize, xzStepSize, R_min, R_max, xz_range, cfgCosThStepSize, cfgPhiStepSize, cfgPsiStepSize, T, cut
+	real(kind=dp) :: RStepSize, xzStepSize, R_min, R_max, xz_range, cfgCosThStepSize, cfgPsiStepSize, T, cut
 	character(len=8) :: c_explicit_R
-	integer :: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins, norm_length
+	integer :: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins, radius
 !
 	integer	:: xBins, zBins
 	real(kind=dp)	:: density = 0.00750924_dp ! numerical density of chloroforms per Angstrom**3
@@ -90,9 +91,6 @@ program compute_avgForce
 
 	! make list of average direct force from 'collapsed' file.
 	call make_hist_table(histFile)
-
-	! Average the 3D input histogram into a 2D input histogram.
-	call collapse_3D_to_2D
 
 	! Now that we have the relevant information spline the g and f arrays along r.
 	call spline_hist_array
@@ -203,7 +201,7 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
 	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, thetaBinsFlag, phiBinsFlag, &
-		& psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag, norm_lengthFlag
+		& psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag, radiusFlag
 
 	outFileFlag = .false.
 	RstepSizeFlag = .false.
@@ -217,7 +215,7 @@ subroutine read_cfg(cfgFile, outFile)
 	psiBinsFlag = .false.
 	TFlag = .false.
 	cutFlag = .false.
-	norm_lengthFlag = .false.
+	radiusFlag = .false.
 
 	ios = 0
 
@@ -274,10 +272,10 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) cut
 				write(*,*) "Bicubic/Bilinear Cutoff:		", cut
 				cutFlag= .true.
-			else if (firstWord .eq. "norm_length") then
-				read(line,*) norm_length
-				write(*,*) "Normalization length:		", norm_length
-				norm_lengthFlag= .true.
+			else if (firstWord .eq. "solute_radius") then
+				read(line,*) radius
+				write(*,*) "Solute radius:		", radius
+				radiusFlag= .true.
 			end if
 		end if
 	end do
@@ -331,8 +329,8 @@ subroutine read_cfg(cfgFile, outFile)
 		write(*,*) "Config file must have a 'bicubic_cuttoff' value"
 		stop
 	end if
-	if (norm_lengthFlag.eqv..false.) then
-		write(*,*) "Config file must have a 'norm_length' value"
+	if (radiusFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'solute_radius' value"
 		stop
 	end if
 
@@ -449,84 +447,7 @@ subroutine make_hist_table(histFile)
 end subroutine make_hist_table
 
 
-! Average the 3D g and force arrays into 2D by integrating over phi.
-subroutine collapse_3D_to_2D
-	use histData
-	use cfgData
-	use constants
-	implicit none
-	integer			:: ir, ith, iphi
-	real(kind=dp)	:: norm_factor
-	real(kind=dp),allocatable	:: g2D(:,:), fr2D(:,:), fs2D(:,:), gc2D(:,:)	!fixme: move into a module
-	real(kind=dp),allocatable	:: gtest(:,:)	!debug
-
-	write(*,*) 'Averaging 3D input histogram into 2D...'
-
-	! Collapse the g(r)
-	allocate( g2D(histDistBins,histCosThBins) )
-	g2D = 0_dp
-
-	! Volume correct the counts
-	do ir = 1, histDistBins
-		do ith = 1, histCosThBins
-			do iphi = 1, histPhiBins
-				g2D(ir,ith) = g2D(ir,ith) + gc(ir,ith,iphi)		! make it the counts array summed along the phi dimension
-			end do
-			g2D(ir,ith) = g2D(ir,ith)/(4*pi*histDist(ir)**2)	! volume correct the counts
-		end do
-	end do
-
-	! Normalize
-	norm_factor = 0_dp
-	do ith = 1, histCosThBins
-		do ir = (histDistBins-norm_length), histDistBins
-			norm_factor = norm_factor + g2D(ir,ith)
-		end do
-	end do
-	norm_factor = norm_factor/real(norm_length+1,dp)/real(histCosThBins,dp)
-	g2D(:,:) = g2D(:,:)/norm_factor
-
-	! Collapse the forces
-	allocate( fr2D(histDistBins,histCosThBins), fs2D(histDistBins,histCosThBins), gc2D(histDistBins,histCosThBins) )
-	fr2D = 0_dp; fs2D = 0_dp; gc2D = 0_dp
-
-	! Convert back to total force
-	do ir = 1, histDistBins
-		do ith = 1, histCosThBins
-			do iphi = 1, histPhiBins
-				gc2D(ir,ith) = gc2D(ir,ith) + gc(ir,ith,iphi)
-				fr2D(ir,ith) = fr2D(ir,ith) + fr(ir,ith,iphi)*gc(ir,ith,iphi)
-				fs2D(ir,ith) = fs2D(ir,ith) + fs(ir,ith,iphi)*gc(ir,ith,iphi)
-			end do
-			fr2D(ir,ith) = fr2D(ir,ith)/gc2D(ir,ith)
-			fs2D(ir,ith) = fs2D(ir,ith)/gc2D(ir,ith)
-		end do
-	end do
-
-	!debug: try averaging the input hist without using the gcounts array and compare to the way with gcounts. gc is definitely okay
-	allocate( gtest(histDistBins,histCosThBins) )
-	gtest = 0_dp
-	do ir = 1, histDistBins
-		do ith = 1, histCosThBins
-			do iphi = 1, histPhiBins
-				gtest(ir,ith) = gtest(ir,ith) + g(ir,ith,iphi) ! g is just g at the moment
-			end do
-			gtest(ir,ith) = gtest(ir,ith) / real(histPhiBins,dp)
-		end do
-	end do
-
-	open(45)	!debug
-	do ir = 1, histDistBins
-		do ith = 1, histCosThBins
-			write(45,*) histDist(ir), histCosTh(ith), g2D(ir,ith), gtest(ir,ith)	!, fr2D(ir,ith), fs2D(ir,ith)
-		end do
-	end do
-	close(45)
-
-end subroutine collapse_3D_to_2D
-
-
-! spline the r dimension of each theta phi stack.
+! spline the r dimension of each theta phi stack and then average over phi for 2D
 subroutine spline_hist_array
 	use constants
 	use functions
@@ -534,19 +455,18 @@ subroutine spline_hist_array
 	use cfgData
 	use idealSolv
 	implicit none
-	integer							:: i, ir, ith, iphi, imin, igo
-	real(kind=dp)					:: x, y, norm_factor
-	real(kind=dp),allocatable	:: idealHist(:,:,:,:), idealHist2D(:,:,:)
-	integer,allocatable			:: ispline(:)
+	integer							:: i, ir, ith, iphi, imin, igo, ir2, igo1, igo2
+	real(kind=dp)					:: x, y, norm_factor, boltz, boltz_sum
+	real(kind=dp),allocatable	:: idealHist(:,:,:,:), idealHist2D(:,:,:), u0(:,:)
+	integer,allocatable			:: ispline(:,:), ispline2D(:)
+	!real(kind=dp)	:: xx, yy !debug
+
+	write(*,*) 'Editing input histogram arrays with ideal arrays in 3D...'
 
 	! Calculate a 4D array idealHist(g/f,r,th,phi)
-	allocate( idealHist(7,histDistBins,histCosThBins,histPhiBins) )
+	allocate( idealHist(7,histDistBins,histCosThBins,histPhiBins), ispline(histCosThBins,histPhiBins), ispline2D(histCosThBins) )
 	idealHist = 0_dp; ispline = 0_dp
-	call ideal_CL3(histDistBins,histDistStepSize,histCosThBins,cosTh_min,cosTh_max,histPhiBins,phi_min,phi_hmax, idealHist)
-
-	! Calculate the 2D version of idealHist with phi averaged over
-	allocate( idealHist2D(5,histDistBins,histCosThBins) )
-	call ideal_3D_to_2D(idealHist,histDistBins,histCosThBins,histPhiBins, idealHist2D)
+	call ideal_CL3(histDistBins,histDistStepSize,histCosThBins,cosTh_min,cosTh_max,histPhiBins,phi_min,phi_hmax,radius, idealHist)
 
 	! Edit the input hist arrays to more smoothly transition to -/+ infinity with the help of idealHist.
 	do ith = 1, histCosThBins
@@ -561,14 +481,14 @@ find:		do ir = 1, histDistBins
 					exit find
 				end if
 			end do find
-
+			 
 			! Note: Add the ideal values to bins with no sampling. And half counts to bins that probably should have had sampling.
 			igo = 0
 			do ir = histDistBins, 1, -1
 				if (ir.ge.imin) then
 					if (g(ir,ith,iphi).gt.1d-6) then
 						g(ir,ith,iphi) = log(g(ir,ith,iphi))
-					else	! note: This is a zero bin where there probably should have been something. So put a single count in.
+					else	! note: This is a zero bin where there probably should have been something. So put a half count in.
 						g(ir,ith,iphi) = log(real(0.5,dp)/(4*pi*histDist(ir)**2)/norm_factor)
 						fr(ir,ith,iphi) = idealHist(2,ir,ith,iphi)
 						fs(ir,ith,iphi) = idealHist(3,ir,ith,iphi)
@@ -580,66 +500,120 @@ find:		do ir = 1, histDistBins
 					! ln(g(r<r0)) = -u_dir(r)/T + ln(g(r0)) - u_dir(r0)/T
 					g(ir,ith,iphi) = ( -idealHist(1,ir,ith,iphi) + idealHist(1,imin,ith,iphi) )/kb_kcalmolK/T + g(imin,ith,iphi)
 					if ((g(ir,ith,iphi).lt.cut).and.(igo.eq.0)) then ! the largest r to go past the cutoff
-						ispline(ith) = ir
+						ispline(ith,iphi) = ir
 						igo = 1
 					end if
 					fr(ir,ith,iphi) = idealHist(2,ir,ith,iphi)
-					if (fr(ir,ith,iphi).gt.-cut) then
-						fr(ir,ith,iphi) = -cut
-					end if
 					fs(ir,ith,iphi) = idealHist(3,ir,ith,iphi)
-					if (fs(ir,ith,iphi).gt.-cut) then
-						fs(ir,ith,iphi) = -cut
-					end if
 					ft(ir,ith,iphi) = idealHist(4,ir,ith,iphi)
-					if (ft(ir,ith,iphi).gt.-cut) then
-						ft(ir,ith,iphi) = -cut
-					end if
 				end if
 			end do
 		end do
 	end do
+	 
+	! Set all forces past the first (largest r) bin to reach the cutoff to the cutoff value. !debug
+!	igo = 0; igo1 = 0; igo2 = 0
+!	do iphi = 1, histPhiBins
+!		do ith = 1, histCosThBins
+!			do ir = histDistBins, 1, -1
+!				if ((fr(ir,ith,iphi).gt.-cut).and.(igo.eq.0)) then
+!					fr(1:ir,ith,iphi) = -cut
+!					igo = 1
+!				end if
+!				if ((fs(ir,ith,iphi).gt.-cut).and.(igo1.eq.0)) then
+!					fs(1:ir,ith,iphi) = -cut
+!					igo1 = 1
+!				end if
+!				if ((ft(ir,ith,iphi).gt.-cut).and.(igo2.eq.0)) then
+!					ft(1:ir,ith,iphi) = -cut
+!					igo2 = 1
+!				end if
+!			end do
+!			igo = 0; igo1 = 0; igo2 = 0
+!		end do
+!	end do
 
 	! Average the 3D input histograms into 2D
-	g = exp(g)	! convert log(g) back to g for averaging over phi
-	allocate( g2D(histDistBins,histCosThBins), fr2D(histDistBins,histCosThBins), fs2D(histDistBins,histCosThBins) )
-	g2D = 0_dp; fr2D = 0_dp; fs2D = 0_dp
+	write(*,*) 'Averaging input histograms from 3D into 2D...'
+
+	allocate( g2D(histDistBins,histCosThBins), fr2D(histDistBins,histCosThBins), fs2D(histDistBins,histCosThBins), &
+		& u0(histDistBins,histCosThBins) )
+	g2D = 0_dp; fr2D = 0_dp; fs2D = 0_dp; u0 = 0_dp
 
 	! Find the minimum value of u(phi; r,th) ==> u0(r,th)
-	! note: dim=3 in this case means the phi dimension. Replace the array in phi at each r,th with the maximum value of the array
-	u0 = maxval(g(:,:,:), 3)
+	! dim=3 in this case means the phi dimension. Replace the array in phi at each r,th with the minimum value of the array, making
+	! an array u0(r,th).
+	u0 = minval(-g(:,:,:),dim=3)
 
-	do ir = 1, histDistBins
-		do ith = 1, histCosThBins
+	do ith = 1, histCosThBins
+		do ir = 1, histDistBins
 			boltz_sum = 0_dp
 			do iphi = 1, histPhiBins
-				boltz = g(ir,ith,iphi) * u0(ir,ith)
-				g2D(ir,ith) = g2D(ir,ith) + g(ir,ith,iphi) ! g is just g at the moment
-				fr2D(ir,ith) = fr2D(ir,ith) + (boltz * fr(ir,ith,iphi))	! f.r
-				fs2D(ir,ith) = fs2D(ir,ith) + (boltz * fs(ir,ith,iphi))	! f.s
-				boltz_sum = boltz_sum + boltz	! denominator for averaging forces over phi
+				boltz = exp(g(ir,ith,iphi) + u0(ir,ith))
+				g2D(ir,ith) = g2D(ir,ith) + exp(g(ir,ith,iphi)) ! g is g
+				fr2D(ir,ith) = fr2D(ir,ith) + (boltz * fr(ir,ith,iphi)) ! f.r
+				fs2D(ir,ith) = fs2D(ir,ith) + (boltz * fs(ir,ith,iphi)) ! f.s
+				boltz_sum = boltz_sum + boltz ! denominator for averaging over phi
 			end do
-			g2D(ir,ith) = log( g2D(ir,ith) / real(histPhiBins,dp) )	! finish average over phi by dividing and then change g to log(g)
+			g2D(ir,ith) = log(g2D(ir,ith) / real(histPhiBins,dp)) ! finish average over phi by dividing and convert to log(g)
 			fr2D(ir,ith) = fr2D(ir,ith) / boltz_sum
 			fs2D(ir,ith) = fs2D(ir,ith) / boltz_sum
-			! note: After the average is done assign ispline index
-			do ir2 = 1, histDistBins
-				if (g2D(ir2,ith).lt.cut) then
-					ispline(ith) = ir2
-				end if
-			end do
+		end do
+		! After the average is done enforce lowest value to cutoff
+		do ir2 = 1, histDistBins
+			if (g2D(ir2,ith).lt.cut) then
+				g2D(ir2,ith) = cut
+				fr2D(ir2,ith) = -cut
+				fs2D(ir2,ith) = -cut
+				ispline2D(ith) = ir2
+			end if
 		end do
 	end do
-
-	allocate( g2(histDistBins,histCosThBins), fr2(histDistBins,histCosThBins), fs2(histDistBins,histCosThBins) )
-	g2 = 0_dp; fr2 = 0_dp; fs2 = 0_dp
-
-	! Spline the g and force arrays using ideal values for the slopes at small r. This populates the second derivative arrays.
-	do ith = 1, histCosThBins
-		call spline(histDist,g2D(:,ith),ispline(ith),histDistBins,idealHist2D(2,ispline(ith),ith),dble(0), g2(:,ith))
-		call spline(histDist,fr2D(:,ith),ispline(ith),histDistBins,idealHist2D(4,ispline(ith),ith),dble(0), fr2(:,ith))
-		call spline(histDist,fs2D(:,ith),ispline(ith),histDistBins,idealHist2D(5,ispline(ith),ith),dble(0), fs2(:,ith))
+	
+	! note: write out the effective input histogram after averaging/alterations.
+	write(*,*) 'Writing input histogram after averaging/alterations to "input_hist.out" ...'
+	open(91,file='input_hist.out',status='replace')
+	write(91,*) '# 1. Distance'
+	write(91,*) '# 2. Cosine Theta'
+	write(91,*) '# 3. g'
+	write(91,*) '# 4. f.r'
+	write(91,*) '# 5. f.s'
+	write(91,*) '#'
+	write(91,*) '#'
+	do ir = 1, histDistBins
+		do ith = 1, histCosThBins
+			write(91,*) histDist(ir), histCosTh(ith), g2D(ir,ith), fr2D(ir,ith), fs2D(ir,ith)
+		end do
 	end do
+	close(91)
+
+	! Spline the log(g) and force arrays using ideal values for the slopes at small r. This populates the second derivative arrays.
+	! This requires ideal values that have been averaged over phi.
+	allocate( idealHist2D(5,histDistBins,histCosThBins) )
+	call ideal_3D_to_2D(idealHist,histDistBins,histCosThBins,histPhiBins, idealHist2D)
+
+	allocate( g2D2(histDistBins,histCosThBins), fr2D2(histDistBins,histCosThBins), fs2D2(histDistBins,histCosThBins) )
+	g2D2 = 0_dp; fr2D2 = 0_dp; fs2D2 = 0_dp
+
+	do ith = 1, histCosThBins
+		call spline(histDist,g2D(:,ith),ispline2D(ith),histDistBins,idealHist2D(2,ispline2D(ith),ith),real(0,dp), g2D2(:,ith))
+		call spline(histDist,fr2D(:,ith),ispline2D(ith),histDistBins,idealHist2D(4,ispline2D(ith),ith),real(0,dp), fr2D2(:,ith))
+		call spline(histDist,fs2D(:,ith),ispline2D(ith),histDistBins,idealHist2D(5,ispline2D(ith),ith),real(0,dp), fs2D2(:,ith))
+	end do
+
+	!debug
+	!do ith = histCosThBins, histCosThBins
+		!do ir = 1, histDistBins
+			!write(45,*) histDist(ir), histCosTh(ith), g2D(ir,ith), g2D2(ir,ith), idealHist2D(1,ir,ith)
+		!end do
+	!end do
+	!do ith = histCosThBins, histCosThBins
+		!do ir = 1, histDistBins*100
+			!xx = ir*(histDistStepSize/100_dp)
+			!call splint(histDist,g2D(:,ith),g2D2(:,ith),histDistBins,xx, yy)
+			!write(55,*) xx, yy
+		!end do
+	!end do
 
 end subroutine spline_hist_array
 
@@ -679,68 +653,59 @@ subroutine R_list
 end subroutine R_list
 
 
-! Populate and wrap the temporary (cosTh) arrays into a loop.
+! Populate the temporary (cosTh) arrays into a loop.
 subroutine set_tmp_arrays
 	use histData
 	use angleData
 	use functions
 	implicit none
-	integer			:: j
+	integer	:: j
+	!real(kind=dp) :: xx,yy !debug
 
 	! Evaluate the splines for every theta point at these distances and save those arrays at gTmp1, gTmp2, frTmp1, fsTmp1. The
 	! numbers refer to which solute they correpsond to. These arrays are saved and used until the next distance bin.
 	do j = 1, histCosThBins
 		if ((rSolvn(1).gt.histDist(histDistBins)).and.(rSolvn(2).gt.histDist(histDistBins))) then
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,histDist(histDistBins-1), gTmp1(1,j))
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,histDist(histDistBins-1), gTmp2(1,j))
-			call splint(histDist,fr(:,j),fr2(:,j),histDistBins,histDist(histDistBins-1), frTmp1(1,j))
-			call splint(histDist,fs(:,j),fs2(:,j),histDistBins,histDist(histDistBins-1), fsTmp1(1,j))
-		else if (rSolvn(1).gt.histDist(histDistBins)) then
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,histDist(histDistBins-1), gTmp1(1,j))
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,rSolvn(2), gTmp2(1,j))
-			call splint(histDist,fr(:,j),fr2(:,j),histDistBins,histDist(histDistBins-1), frTmp1(1,j))
-			call splint(histDist,fs(:,j),fs2(:,j),histDistBins,histDist(histDistBins-1), fsTmp1(1,j))
-		else if (rSolvn(2).gt.histDist(histDistBins)) then
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,rSolvn(1), gTmp1(1,j))
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,histDist(histDistBins-1), gTmp2(1,j))
-			call splint(histDist,fr(:,j),fr2(:,j),histDistBins,rSolvn(1), frTmp1(1,j))
-			call splint(histDist,fs(:,j),fs2(:,j),histDistBins,rSolvn(1), fsTmp1(1,j))
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,histDist(histDistBins), gTmp1(1,j))
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,histDist(histDistBins), gTmp2(1,j))
+			call splint(histDist,fr2D(:,j),fr2D2(:,j),histDistBins,histDist(histDistBins), frTmp1(1,j))
+			call splint(histDist,fs2D(:,j),fs2D2(:,j),histDistBins,histDist(histDistBins), fsTmp1(1,j))
+		else if ((rSolvn(1).gt.histDist(histDistBins)).and.(rSolvn(2).lt.histDist(histDistBins))) then
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,histDist(histDistBins), gTmp1(1,j))
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,rSolvn(2), gTmp2(1,j))
+			call splint(histDist,fr2D(:,j),fr2D2(:,j),histDistBins,histDist(histDistBins), frTmp1(1,j))
+			call splint(histDist,fs2D(:,j),fs2D2(:,j),histDistBins,histDist(histDistBins), fsTmp1(1,j))
+		else if ((rSolvn(1).lt.histDist(histDistBins)).and.(rSolvn(2).gt.histDist(histDistBins))) then
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,rSolvn(1), gTmp1(1,j))
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,histDist(histDistBins), gTmp2(1,j))
+			call splint(histDist,fr2D(:,j),fr2D2(:,j),histDistBins,rSolvn(1), frTmp1(1,j))
+			call splint(histDist,fs2D(:,j),fs2D2(:,j),histDistBins,rSolvn(1), fsTmp1(1,j))
 		else
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,rSolvn(1), gTmp1(1,j))
-			call splint(histDist,g(:,j),g2(:,j),histDistBins,rSolvn(2), gTmp2(1,j))
-			call splint(histDist,fr(:,j),fr2(:,j),histDistBins,rSolvn(1), frTmp1(1,j))
-			call splint(histDist,fs(:,j),fs2(:,j),histDistBins,rSolvn(1), fsTmp1(1,j))
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,rSolvn(1), gTmp1(1,j))
+			call splint(histDist,g2D(:,j),g2D2(:,j),histDistBins,rSolvn(2), gTmp2(1,j))
+			call splint(histDist,fr2D(:,j),fr2D2(:,j),histDistBins,rSolvn(1), frTmp1(1,j))
+			call splint(histDist,fs2D(:,j),fs2D2(:,j),histDistBins,rSolvn(1), fsTmp1(1,j))
 		end if
 	end do
 
-	! Note: Wrap g values first before calculating derivatives.
-	! Wrap the two ends of the values.
-	gTmp1(1,0) = gTmp1(1,1)
-	gTmp1(1,histCosThBins+1) = gTmp1(1,histCosThBins)
-	gTmp2(1,0) = gTmp2(1,1)
-	gTmp2(1,histCosThBins+1) = gTmp2(1,histCosThBins)
-	frTmp1(1,0) = frTmp1(1,1)
-	frTmp1(1,histCosThBins+1) = frTmp1(1,histCosThBins)
-	fsTmp1(1,0) = fsTmp1(1,1)
-	fsTmp1(1,histCosThBins+1) = fsTmp1(1,histCosThBins)
-
 	! Spline the Tmp arrays along theta.
 	do j = 1, histCosThBins
-		call symm_spline(histCosThStepSize,gTmp1(1,1:histCosThBins),1,histCosThBins,real(0,dp),real(0,dp), gTmp1(2,1:histCosThBins))
-		call symm_spline(histCosThStepSize,gTmp2(1,1:histCosThBins),1,histCosThBins,real(0,dp),real(0,dp), gTmp2(2,1:histCosThBins))
-		call symm_spline(histCosThStepSize,frTmp1(1,1:histCosThBins),1,histCosThBins,real(0,dp),real(0,dp), frTmp1(2,1:histCosThBins))
-		call symm_spline(histCosThStepSize,fsTmp1(1,1:histCosThBins),1,histCosThBins,real(0,dp),real(0,dp), fsTmp1(2,1:histCosThBins))
+		call symm_tridag(histCosThStepSize,gTmp1(1,:),histCosThBins, gTmp1(2,:))
+		call symm_tridag(histCosThStepSize,gTmp2(1,:),histCosThBins, gTmp2(2,:))
+		call symm_tridag(histCosThStepSize,frTmp1(1,:),histCosThBins, frTmp1(2,:))
+		call symm_tridag(histCosThStepSize,fsTmp1(1,:),histCosThBins, fsTmp1(2,:))
 	end do
 
-	! Wrap the two ends of the 2nd derivatives.
-	gTmp1(2,0) = gTmp1(2,1)
-	gTmp1(2,histCosThBins+1) = gTmp1(2,histCosThBins)
-	gTmp2(2,0) = gTmp2(2,1)
-	gTmp2(2,histCosThBins+1) = gTmp2(2,histCosThBins)
-	frTmp1(2,0) = frTmp1(2,1)
-	frTmp1(2,histCosThBins+1) = frTmp1(2,histCosThBins)
-	fsTmp1(2,0) = fsTmp1(2,1)
-	fsTmp1(2,histCosThBins+1) = fsTmp1(2,histCosThBins)
+	!debug
+	!do j = 1, histCosThBins
+		!write(65,*) histCosTh(j), gTmp1(1,j), gTmp1(2,j)
+	!end do
+	!do j = 1, histCosThBins*100
+		!xx = j*(histCosThStepSize/100_dp)-1_dp
+		!call symm_splint(histCosTh,histCosThStepSize,gTmp1(1,:),gTmp1(2,:),histCosThBins,xx, yy)
+		!write(75,*) xx, yy
+	!end do
+	!print*, histCosThStepSize/6_dp
 
 end subroutine set_tmp_arrays
 
@@ -752,7 +717,7 @@ subroutine setup_compute_avg_force
 	use ctrlData
 	implicit none
 	integer			:: i
-	real(kind=dp)	:: phiLF, psiLF
+	real(kind=dp)	:: psiLF
 
 	write(*,*) "Setting up for average force iteration..."
 
@@ -760,7 +725,7 @@ subroutine setup_compute_avg_force
 		cfgRBins = crdLines
 		write(*,*) "Number of R Bins:		", cfgRBins
 	else if (explicit_R .eqv. .false.) then
-		cfgRBins = int( (R_max - R_min)/RStepSize )
+		cfgRBins = int( (R_max - R_min)/RStepSize + 1 )
 		if (cfgRBins .eq. 0) then
 			cfgRBins = 1
 		end if
@@ -776,7 +741,7 @@ subroutine setup_compute_avg_force
 	R_axis = 0_dp; fAvg = 0_dp; x_axis = 0_dp; z_axis = 0_dp
 
 	! allocate arrays for control arrays
-	allocate( frcSPA(3, xBins, zBins), grSPA(xBins, zBins) )
+	allocate( frcSPA(2, xBins, zBins), grSPA(xBins, zBins) )
 
 	! Distance Axes
 	do i = 1, cfgRBins
@@ -794,8 +759,7 @@ subroutine setup_compute_avg_force
 	end do
 
 	! ANGLES
-	allocate( cosThetaLF(cfgCosThBins), sinThetaLF(cfgCosThBins), sinPhiLF(cfgPhiBins), cosPhiLF(cfgPhiBins), sinPsiLF(cfgPsiBins), &
-		& cosPsiLF(cfgPsiBins) )
+	allocate( cosThetaLF(cfgCosThBins), sinThetaLF(cfgCosThBins), sinPsiLF(cfgPsiBins), cosPsiLF(cfgPsiBins) )
 
 	! Theta
 	! tilt off of z
@@ -805,16 +769,6 @@ subroutine setup_compute_avg_force
 		sinThetaLF(i) = sqrt(abs(1_dp-cosThetaLF(i)**2))
 	end do
 	write(*,*) "Config Cos(Theta) Step Size:		", cfgCosThStepSize
-
-	! Phi
-	! twist about z
-	cfgPhiStepSize = (phi_max - phi_min) / real(cfgPhiBins, dp)
-	do i = 1, cfgPhiBins
-		phiLF = (i+0.5_dp)*cfgPhiStepSize
-		sinPhiLF(i) = sin(phiLF)
-		cosPhiLF(i) = cos(phiLF)
-	end do
-	write(*,*) "Config Phi Step Size:			", cfgPhiStepSize
 
 	! Psi
 	! processison about z
@@ -838,26 +792,26 @@ subroutine compute_avg_force
 	use constants
 	use functions
 	implicit none
-	integer			:: r, i, j, ip, ithLF, iphiLF, ipsiLF, tid, omp_get_thread_num, omp_get_num_threads
-	real(kind=dp)	:: gx, gx2, fx(3)
+	integer			:: r, i, j, ip, ithLF, ipsiLF, tid, omp_get_thread_num, omp_get_num_threads
+	real(kind=dp)	:: gx, gx2, fx(2)
 
 	write(*,*) "Computing average force..."
 	flush(6)
 
 	! Note: until I find a better way to do this. This is how I will allocate the Tmp arrays.
-	!$omp PARALLEL DEFAULT( none ) PRIVATE( tid ) SHARED( histCosThBins, histPhiBins )
+	!$omp PARALLEL DEFAULT( none ) PRIVATE( tid ) SHARED( histCosThBins )
 	! Allocate temporary wrapped angular arrays for spline interpolation here because they are THREADPRIVATE and need to be allocated
 	! for each cpu. The first index determines whether it's the f(x);2nd deriv.
-	allocate( gTmp1(2,0:histCosThBins+1), gTmp2(2,0:histCosThBins+1), frTmp1(2,0:histCosThBins+1), fsTmp1(2,0:histCosThBins+1) )
+	allocate( gTmp1(2,histCosThBins), gTmp2(2,histCosThBins), frTmp1(2,histCosThBins), fsTmp1(2,histCosThBins) )
 	!$omp END PARALLEL
 
 	! Calculate the average force integral for top half of bisecting plane of cylinder
 	do r = 1, cfgRBins ! loop lj--lj distances
 		frcSPA = 0_dp; grSPA = 0_dp
 		!$omp PARALLEL DEFAULT( none ) &
-		!$omp PRIVATE( ip, i, j, ithLF, iphiLF, ipsiLF, gx, gx2, fx ) &
-		!$omp SHARED( r, xBins, zBins, cut, R_axis, x_axis, z_axis, cfgCosThBins, cfgPhiBins, cfgPsiBins, histCosTh, histPhi, &
-		!$omp&	histCosThBins, histPhiBins, histCosThStepSize, histPhiStepSize, cosTh_min, phi_min, frcSPA, grSPA )
+		!$omp PRIVATE( ip, i, j, ithLF, ipsiLF, gx, gx2, fx ) &
+		!$omp SHARED( r, xBins, zBins, cut, R_axis, x_axis, z_axis, cfgCosThBins, cfgPsiBins, histCosTh, histCosThBins, &
+		!$omp&	histCosThStepSize, cosTh_min, frcSPA, grSPA )
 		!!$omp	NUM_THREADS( 1 )
 		if ((omp_get_thread_num().eq.0).and.(r.eq.1)) then
 			write(*,*) 'Parallel CPUs:			', omp_get_num_threads()
@@ -866,9 +820,10 @@ subroutine compute_avg_force
 		!$omp DO SCHEDULE( guided )
 		do ip = 1, (xBins*zBins)
 			! Convert single index 'ip' to the x and z indicies 'i' and 'j' respectively.
-			i = int((ip-1)/zBins)+1
-			j = mod(ip-1,zBins)+1
-
+			i = int((ip-1)/zBins)+1		! x integer
+			j = mod(ip-1,zBins)+1		! z integer
+			!if ((i.eq.19).and.(j.eq.2)) then	!debug
+			 
 			rSolv1(1) = -R_axis(r)/2_dp - x_axis(i)
 			rSolv1(2) = 0_dp
 			rSolv1(3) = -z_axis(j)
@@ -877,59 +832,51 @@ subroutine compute_avg_force
 			rSolv2(2) = 0_dp
 			rSolv2(3) = -z_axis(j)
 			rSolvn(2) = norm2(rSolv2)
-
+			 
 			! Populate and wrap the arrays for taking the derivatives for bicubic interpolation at this distance.
 			call set_tmp_arrays
-
+			 
 			! Loop through orientations of solvent at x(i) and z(j)
 			do ithLF = 1, cfgCosThBins
 				do ipsiLF = 1, cfgPsiBins
 					if ((rSolvn(1) .lt. 1d-6) .or. (rSolvn(2) .lt. 1d-6)) then
 						gx = 0_dp ! avoid NaNs in calc_angles
 					else
-						call calc_angles(ipsiLF, ithLF, iphiLF)
-						call splint()
-						call bicubic_int(cut,histCosTh,histPhi,histCosThBins,histPhiBins,histCosThStepSize,histPhiStepSize,cosTh_min,&
-							& phi_min,gTmp1,cosTh(1),phi(1), gx) ! solute 1
-						call bicubic_int(cut,histCosTh,histPhi,histCosThBins,histPhiBins,histCosThStepSize,histPhiStepSize,cosTh_min,&
-							& phi_min,gTmp2,cosTh(2),phi(2), gx2) ! solute 2
+						call calc_angles(ipsiLF, ithLF)
+						call symm_splint(histCosTh,histCosThStepSize,gTmp1(1,:),gTmp1(2,:),histCosThBins,cosTh(1), gx)	! solute 1
+						call symm_splint(histCosTh,histCosThStepSize,gTmp2(1,:),gTmp2(2,:),histCosThBins,cosTh(2), gx2)	! solute 2
 						gx = exp(gx+gx2)
 					end if
-
+					 
 					if (gx .gt. 1d-6) then ! if gx == 0 then don't waste time with the rest of the calculation
-						call bicubic_int(cut,histCosTh,histPhi,histCosThBins,histPhiBins,histCosThStepSize,histPhiStepSize,cosTh_min,&
-							& phi_min,frTmp1,cosTh(1),phi(1), fx(1))
-						call bicubic_int(cut,histCosTh,histPhi,histCosThBins,histPhiBins,histCosThStepSize,histPhiStepSize,cosTh_min,&
-							& phi_min,fsTmp1,cosTh(1),phi(1), fx(2))
-						call bicubic_int(cut,histCosTh,histPhi,histCosThBins,histPhiBins,histCosThStepSize,histPhiStepSize,cosTh_min,&
-							& phi_min,ftTmp1,cosTh(1),phi(1), fx(3))
-
+						call symm_splint(histCosTh,histCosThStepSize,frTmp1(1,:),frTmp1(2,:),histCosThBins,cosTh(1), fx(1))
+						call symm_splint(histCosTh,histCosThStepSize,fsTmp1(1,:),fsTmp1(2,:),histCosThBins,cosTh(1), fx(2))
+						 
 						frcSPA(1,i,j) = frcSPA(1,i,j) + (gx * fx(1) * (-rSolv1(1)/rSolvn(1)))	! (f.r)*g.R^{hat}
 						frcSPA(2,i,j) = frcSPA(2,i,j) + (gx * fx(2) * (-sSolv1(1)/sSolv1n))		! (f.s)*g.R^{hat}
-						frcSPA(3,i,j) = frcSPA(3,i,j) + (gx * fx(3) * (-tSolv1(1)/tSolv1n))		! (f.t)*g.R^{hat}
 						grSPA(i,j) = grSPA(i,j) + gx
 					end if
 				end do !psi
 			end do !theta
+			!end if	!debug
 		end do !ip
 		!$omp END DO
 		!$omp END PARALLEL
-
+		 
 		! Add each cell forces to average and normalize
 		do i = 1, xBins
 			do j = 1, zBins
-				fAvg(r) = fAvg(r) + ((frcSPA(1,i,j) + frcSPA(2,i,j) + frcSPA(3,i,j)) * z_axis(j))
+				fAvg(r) = fAvg(r) + ((frcSPA(1,i,j) + frcSPA(2,i,j)) * z_axis(j))
 				frcSPA(1,i,j) = frcSPA(1,i,j)/grSPA(i,j)
 				frcSPA(2,i,j) = frcSPA(2,i,j)/grSPA(i,j)
-				frcSPA(3,i,j) = frcSPA(3,i,j)/grSPA(i,j)
-				grSPA(i,j) = grSPA(i,j)/cfgCosThBins/cfgPhiBins/cfgPsiBins
+				grSPA(i,j) = grSPA(i,j)/cfgCosThBins/cfgPsiBins
 			end do !z again
 		end do !x again
 		call write_test_out(r) ! write grSPA and frcSPA arrays
 
 		! NOTE : After the fact multiply all elements by 2*pi*density/8/pi/pi (2*2pi*pi/3 (4pi**2)/3 steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
-		fAvg(r) = fAvg(r)/real(4,dp)/pi*3_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPhiStepSize*cfgPsiStepSize
+		fAvg(r) = fAvg(r)/real(2,dp)*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPsiStepSize
 	end do !r
 
 end subroutine compute_avg_force
@@ -1012,7 +959,7 @@ subroutine write_test_out(r)
 	i_f = (r-1) * int(RStepSize*10)
 	frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
 	write(temp,frmt) i_f ! converting integer to string using 'internal file'
-	filename='hist3D_output.'//trim(temp)//'.dat'
+	filename='hist2D_output.'//trim(temp)//'.dat'
 
 
 	open(35,file=filename,status='replace')
@@ -1022,17 +969,17 @@ subroutine write_test_out(r)
 	write(35,*) "# 3.	g(r)"
 	write(35,*) "# 4.	Force.r"
 	write(35,*) "# 5.	Force.s"
-	write(35,*) "# 6.	Force.t"
+	write(35,*) "# "
 	do j = 1, zBins
 		do i = 1, xBins
-			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(1,i,j), frcSPA(2,i,j), frcSPA(3,i,j)
+			write(35,898) x_axis(i), z_axis(j), grSPA(i,j), frcSPA(1,i,j), frcSPA(2,i,j)
 		end do
 	end do
 	close(35)
 
 	flush(6)
 	
-898		format (6(1x,es14.7))
+898		format (5(1x,es14.7))
 
 end subroutine write_test_out
 
