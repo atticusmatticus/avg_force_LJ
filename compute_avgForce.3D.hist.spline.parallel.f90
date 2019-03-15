@@ -37,7 +37,7 @@ module cfgData
 	real(kind=dp),allocatable :: x_axis(:), z_axis(:), R_axis(:), fAvg(:), u_dir(:)
 	real(kind=dp) :: RStepSize, xzStepSize, R_min, R_max, xz_range, cfgCosThStepSize, cfgPhiStepSize, cfgPsiStepSize, T, cut
 	character(len=8) :: c_explicit_R
-	integer :: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins
+	integer :: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins, radius
 !
 	integer	:: xBins, zBins
 	real(kind=dp)	:: density = 0.00750924_dp ! numerical density of chloroforms per Angstrom**3
@@ -202,7 +202,7 @@ subroutine read_cfg(cfgFile, outFile)
 	character(len=32) 	:: firstWord, sep
 	integer 			:: ios
 	logical 			:: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, thetaBinsFlag, phiBinsFlag, &
-		& psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag
+		& psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag, radiusFlag
 
 	outFileFlag = .false.
 	RstepSizeFlag = .false.
@@ -216,6 +216,7 @@ subroutine read_cfg(cfgFile, outFile)
 	psiBinsFlag = .false.
 	TFlag = .false.
 	cutFlag = .false.
+	radiusFlag = .false.
 
 	ios = 0
 
@@ -272,6 +273,10 @@ subroutine read_cfg(cfgFile, outFile)
 				read(line,*) cut
 				write(*,*) "Bicubic/Bilinear Cutoff:		", cut
 				cutFlag= .true.
+			else if (firstWord .eq. "solute_radius") then
+				read(line,*) radius
+				write(*,*) "Solute radius:		", radius
+				radiusFlag= .true.
 			end if
 		end if
 	end do
@@ -323,6 +328,10 @@ subroutine read_cfg(cfgFile, outFile)
 	end if
 	if (cutFlag.eqv..false.) then
 		write(*,*) "Config file must have a 'bicubic_cuttoff' value"
+		stop
+	end if
+	if (radiusFlag.eqv..false.) then
+		write(*,*) "Config file must have a 'solute_radius' value"
 		stop
 	end if
 
@@ -456,7 +465,7 @@ subroutine spline_hist_array
 	! Calculate a 4D array idealHist(g/f,r,th,phi)
 	allocate( idealHist(7,histDistBins,histCosThBins,histPhiBins), ispline(histCosThBins,histPhiBins) )
 	idealHist = 0_dp; ispline = 0_dp
-	call ideal_CL3(histDistBins,histDistStepSize,histCosThBins,cosTh_min,cosTh_max,histPhiBins,phi_min,phi_hmax, idealHist)
+	call ideal_CL3(histDistBins,histDistStepSize,histCosThBins,cosTh_min,cosTh_max,histPhiBins,phi_min,phi_hmax,radius, idealHist)
 
 	! Edit the input hist arrays to more smoothly transition to -/+ infinity with the help of idealHist.
 	do ith = 1, histCosThBins
@@ -509,6 +518,26 @@ find:		do ir = 1, histDistBins
 			end do
 		end do
 	end do
+
+	! note: write out the effective input histogram after averaging/alterations.
+	write(*,*) 'Writing input histogram after averaging/alterations to "input_hist.out" ...'
+	open(91,file='input_hist.out',status='replace')
+	write(91,*) '# 1. Distance'
+	write(91,*) '# 2. Cosine Theta'
+	write(91,*) '# 3. Phi [0->pi/3]'
+	write(91,*) '# 4. g'
+	write(91,*) '# 5. f.r'
+	write(91,*) '# 6. f.s'
+	write(91,*) '# 7. f.t'
+	do ir = 1, histDistBins
+		do ith = 1, histCosThBins
+			do iphi = 1, histPhiBins
+				write(91,*) histDist(ir), histCosTh(ith), histPhi(iphi), g(ir,ith,iphi), fr(ir,ith,iphi), fs(ir,ith,iphi), &
+					& ft(ir,ith,iphi)
+			end do
+		end do
+	end do
+	close(91)
 
 	allocate( g2(histDistBins,histCosThBins,histPhiBins), fr2(histDistBins,histCosThBins,histPhiBins), & 
 		& fs2(histDistBins,histCosThBins,histPhiBins), ft2(histDistBins,histCosThBins,histPhiBins) )
@@ -823,7 +852,7 @@ subroutine setup_compute_avg_force
 		cfgRBins = crdLines
 		write(*,*) "Number of R Bins:		", cfgRBins
 	else if (explicit_R .eqv. .false.) then
-		cfgRBins = int( (R_max - R_min)/RStepSize )
+		cfgRBins = int( (R_max - R_min)/RStepSize + 1 )
 		if (cfgRBins .eq. 0) then
 			cfgRBins = 1
 		end if
@@ -993,7 +1022,7 @@ subroutine compute_avg_force
 		end do !x again
 		call write_test_out(r) ! write grSPA and frcSPA arrays
 
-		! NOTE : After the fact multiply all elements by 2*pi*density/8/pi/pi (2*2pi*pi/3 (4pi**2)/3 steradians from orientations)
+		! NOTE : After the fact multiply all elements by 2*pi*density/8/pi/pi ((2*2pi*pi/3)=(4pi**2)/3 steradians from orientations)
 		! 		Number density of chloroform per Angstrom**3 == 0.00750924
 		fAvg(r) = fAvg(r)/real(4,dp)/pi*3_dp*density*xzStepSize*xzStepSize*cfgCosThStepSize*cfgPhiStepSize*cfgPsiStepSize
 	end do !r
