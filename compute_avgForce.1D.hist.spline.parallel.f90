@@ -73,17 +73,17 @@ end module ctrlData
 program compute_avgForce
    use prec
    implicit none
-   character(len=64) :: histFile, cfgFile, outFile
-   real(kind=dp)       :: omp_get_wtime, ti, tf, seconds
-   integer            :: hours, minutes
+   character(len=128) :: histFile, cfgFile, outFile
+   real(kind=dp) :: omp_get_wtime, ti, tf, seconds
+   integer :: hours, minutes
 
    ti = omp_get_wtime()
 
    ! make list of average direct force from 'collapsed' file.
-   call parse_command_line(histFile, cfgFile)
+   call parse_command_line(cfgFile)
 
    ! read config file
-   call read_cfg(cfgFile, outFile)
+   call read_cfg(cfgFile, histFile, outFile)
 
    ! make list of average direct force from 'collapsed' file.
    call make_hist_table(histFile)
@@ -126,29 +126,20 @@ end program compute_avgForce
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 ! parse commandline for relevant files.
-subroutine parse_command_line(histFile, cfgFile) !,outFile)
+subroutine parse_command_line(cfgFile)
    implicit none
-   character(len=64)   :: histFile, cfgFile !, outFile
-   character(len=16)   :: arg
-   integer            :: i
-   logical            :: histFileFlag, cfgFileFlag, histExist, cfgExist
+   character(len=128) :: cfgFile
+   character(len=16) :: arg
+   integer :: i
+   logical :: cfgFileFlag, cfgExist
 
-   histFileFlag = .false.
    cfgFileFlag = .false.
-   histExist = .false.
    cfgExist = .false.
    i=1
    do
       call get_command_argument(i,arg)
       select case (arg)
 
-      case ('-hist')
-         i = i+1
-         call get_command_argument(i,histFile)
-         histFileFlag=.true.
-         INQUIRE(FILE=histFile, EXIST=histExist)
-         write(*,*) 'Histogram File:         ', histFile
-         write(*,*) 'Histogram File Exists:         ', histExist
       case ('-cfg')
          i = i+1
          call get_command_argument(i,cfgFile)
@@ -158,7 +149,6 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
          write(*,*) 'Config File Exists:         ', cfgExist
       case default
          write(*,*) 'Unrecognized command-line option: ', arg
-         write(*,*) 'Usage: compute_avgForce.x -hist [hist file]'
          write(*,*) 'Usage: compute_avgForce.x -cfg [cfg file]'
          stop
 
@@ -167,19 +157,14 @@ subroutine parse_command_line(histFile, cfgFile) !,outFile)
       if (i.ge.command_argument_count()) exit
    end do
 
-   if (histFileFlag.eqv..false.) then
-      write(*,*) "Must provide a hist file using command line argument -hist [hist file name]"
-      stop
-   end if
-
    if (cfgFileFlag.eqv..false.) then
       write(*,*) "Must provide a cfg file using command line argument -cfg [cfg file name]"
       stop
    end if
 
    ! 'ERROR STOP' if either file doesn't exist
-   if ((histExist.eqv..false.).or.(cfgExist.eqv..false.)) then
-      write(*,*) 'hist or cfg files do not exist'
+   if (cfgExist.eqv..false.) then
+      write(*,*) 'cfg file does not exist'
       error stop
    end if
 
@@ -189,16 +174,18 @@ end subroutine parse_command_line
 
 
 ! read python cfg file for g(r) parameters
-subroutine read_cfg(cfgFile, outFile)
+subroutine read_cfg(cfgFile, histFile, outFile)
    use cfgData
    implicit none
-   character(len=64)    :: cfgFile, outFile
-   character(len=128)   :: line
-   character(len=32)    :: firstWord, sep
-   integer              :: ios
-   logical              :: outFileFlag, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, thetaBinsFlag, phiBinsFlag,&
-      & psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag, radiusFlag, offsetFlag
+   character(len=128) :: cfgFile, histFile, outFile
+   character(len=256) :: line
+   character(len=32) :: firstWord, sep
+   integer :: ios
+   logical :: outFileFlag, histFileFlag, histExist, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, &
+      & thetaBinsFlag, phiBinsFlag, psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag, radiusFlag, offsetFlag
 
+   histFileFlag = .false.
+   histExist = .false.
    outFileFlag = .false.
    RstepSizeFlag = .false.
    xzStepSizeFlag = .false.
@@ -221,7 +208,12 @@ subroutine read_cfg(cfgFile, outFile)
       read(20,'(a)',IOSTAT=ios) line
       call split(line,'=',firstWord, sep)
       if (line .ne. "") then
-         if (firstWord .eq. "out_file") then
+         if (firstWord .eq. "hist_file") then
+            read(line,'(a)') histFile
+            write(*,*) "Histogram File:            ", histFile
+            histFileFlag = .true.
+            INQUIRE(FILE=histFile, EXIST=histExist) ! check if it exists
+         else if (firstWord .eq. "out_file") then
             read(line,*) outFile
             write(*,*) "Output File:            ", outFile
             outFileFlag = .true.
@@ -282,6 +274,18 @@ subroutine read_cfg(cfgFile, outFile)
    end do
    close(20)
 
+   if (histFileFlag.eqv..false.) then
+      write(*,*) "Config file must have a 'hist_file' value"
+      stop
+   end if
+   if (histExist.eqv..false.) then
+      write(*,*) "Config file must point to a 'hist_file' that exists: ", histFile, " doesn't exist."
+      stop
+   end if
+   if (outFileFlag.eqv..false.) then
+      write(*,*) "Config file must have a 'out_file' value"
+      stop
+   end if
    if (RstepSizeFlag.eqv..false.) then
       write(*,*) "Config file must have a 'RStepSize' value"
       stop
@@ -349,11 +353,11 @@ subroutine make_hist_table(histFile)
    use histData
    use cfgData
    implicit none
-   character(len=64)            :: histFile
-   character(len=64)            :: junk
-   character(len=512)         :: line
-   integer                     :: ios, ios2, i, j, k, nHistLines
-   real(kind=dp),allocatable   :: histTmp(:,:)
+   character(len=128) :: histFile
+   character(len=64) :: junk
+   character(len=512) :: line
+   integer :: ios, ios2, i, j, k, nHistLines
+   real(kind=dp),allocatable :: histTmp(:,:)
 
    ! read number of lines in histFile and allocate that many points in temporary histogram list, histTmp.
    ios = 0; nHistLines = -1
@@ -365,7 +369,7 @@ subroutine make_hist_table(histFile)
       end if
    end do
    close(20)
-   !write(*,*) "nHistLines", nHistLines
+   write(*,*) "nHistLines", nHistLines
 
    allocate( histTmp(8,nHistLines) )
 
@@ -375,6 +379,7 @@ subroutine make_hist_table(histFile)
    ! read file ignoring comment lines at the beginning
    do while(ios>=0)
       read(20,'(a)',IOSTAT=ios) line
+      print*, i, ios, line; flush(6) !xxx
       if ((line(1:1) .ne. "#") .and. (ios .ge. 0)) then
          !                  dist         cos(Th)         phi/3         g(r)+         g(r)-      <f.r>+         <f.s>+      <f.t>+
          read(line,*) histTmp(1,i), histTmp(2,i), histTmp(3,i), histTmp(4,i), junk, histTmp(5,i), histTmp(6,i), histTmp(7,i), &
@@ -463,7 +468,8 @@ subroutine spline_hist_array
    integer                     :: i, ir, ith, iphi, imin, igo, ir2, igo1, igo2
    real(kind=dp)               :: x, y, norm_factor, boltz, boltz_sum
    real(kind=dp),allocatable   :: idealHist(:,:,:,:), idealHist2D(:,:,:), u0(:,:), idealHist1D(:,:), u01D(:)
-   integer,allocatable         :: ispline(:,:), ispline2D(:), ispline1D
+   integer,allocatable         :: ispline(:,:), ispline2D(:)
+   integer :: ispline1D
    !real(kind=dp)   :: xx, yy   !debug
    integer  :: rTmp !debug
 
@@ -653,7 +659,7 @@ subroutine R_list
    implicit none
    integer            :: ios, i
    character(len=16)   :: junk
-   character(len=64)   :: line
+   character(len=128)   :: line
 
    if (c_explicit_R .eq. 'no') then
       explicit_R = .false.
@@ -789,11 +795,11 @@ subroutine compute_avg_force
          rSolv1(1) = -R_axis(r)/2_dp - x_axis(i)
          rSolv1(2) = 0_dp
          rSolv1(3) = -z_axis(j)
-         rSolvn(1) = norm2(rSolv1)
+         rSolvn(1) = euclid_norm(rSolv1)
          rSolv2(1) = R_axis(r)/2_dp - x_axis(i)
          rSolv2(2) = 0_dp
          rSolv2(3) = -z_axis(j)
-         rSolvn(2) = norm2(rSolv2)
+         rSolvn(2) = euclid_norm(rSolv2)
 
 
          call splint(histDist,g1D,g1D2,histDistBins,rSolvn(1), gx)   ! solute 1
@@ -915,7 +921,7 @@ end subroutine write_test_out
 subroutine write_output(outFile)
    use cfgData
    implicit none
-   character(len=64)    :: outFile
+   character(len=128)    :: outFile
    integer          :: r
 
    open(35,file=outFile,status='replace')
