@@ -27,7 +27,6 @@ module histData
    real(kind=dp) :: histDistStepSize, histCosThStepSize, histPhiStepSize
    integer :: histDistBins, histCosThBins, histPhiBins
    real(kind=dp),allocatable :: longRange(:) !debug
-
 end module histData
 
 ! data from the config file.
@@ -35,13 +34,13 @@ module cfgData
    use prec
    use constants
    real(kind=dp),allocatable :: x_axis(:), z_axis(:), R_axis(:), fAvg(:,:), u_dir(:,:)
-   real(kind=dp) :: RStepSize, xzStepSize, R_min, R_max, xz_range, cfgCosThStepSize, cfgPsiStepSize, T, cut, offset, soluteChg(2), radius
+   real(kind=dp) :: RStepSize, xzStepSize, R_min, R_max, xz_range, T, cut, offset, soluteChg(2), radius, dipole_moment
    character(len=8) :: c_explicit_R
    integer :: cfgRBins, cfgCosThBins, cfgPhiBins, cfgPsiBins, nThreads
 !
    integer :: xBins, zBins
    real(kind=dp) :: density = 0.00739753994553948_dp ! numerical density of chloroforms per Angstrom**3
-   real(kind=dp) :: dipole_moment = 0.23026679557844498_dp ! magnitude of dipole moment chloroform in q_e * AA
+!   real(kind=dp) :: dipole_moment = 0.23026679557844498_dp ! magnitude of dipole moment chloroform in q_e * AA
    real(kind=dp) :: dielectric = 2.3507059228494147_dp ! reduced dielectric constant of chloroform
    real(kind=dp) :: cosTh_max = 1_dp
    real(kind=dp) :: cosTh_min = -1_dp
@@ -50,15 +49,6 @@ module cfgData
    real(kind=dp) :: psi_max = 2_dp*pi
    real(kind=dp) :: psi_min = 0_dp
 end module cfgData
-
-! data for calculating cosTh value.
-module angleData
-   use prec
-   real(kind=dp),allocatable :: sinThetaLF(:), cosThetaLF(:), sinPhiLF(:), cosPhiLF(:), sinPsiLF(:), cosPsiLF(:)
-   real(kind=dp) :: rSolv1(3), rSolv2(3), rSolvn(2), cosTh(2), phi(2), sSolv1(3), tSolv1(3), sSolv1n, tSolv1n
-
-   !$omp THREADPRIVATE( rSolv1, rSolv2, rSolvn, sSolv1, sSolv1n, tSolv1, tSolv1n, cosTh, phi )
-end module angleData
 
 ! testing arrays for force and g(r)
 module ctrlData
@@ -186,7 +176,7 @@ subroutine read_cfg(cfgFile, histFile, outFile)
    integer :: ios
    logical :: outFileFlag, histFileFlag, histExist, RstepSizeFlag, xzStepSizeFlag, RmaxFlag, RminFlag, xzRangeFlag, &
       & thetaBinsFlag, phiBinsFlag, psiBinsFlag, c_explicit_RFlag, TFlag, cutFlag, radiusFlag, offsetFlag, nThreadsFlag, &
-      & soluteChgFlag
+      & soluteChgFlag, dipoleMomentFlag
 
    histFileFlag = .false.;  histExist = .false.
    outFileFlag = .false.
@@ -205,6 +195,7 @@ subroutine read_cfg(cfgFile, histFile, outFile)
    offsetFlag = .false.
    nThreadsFlag = .false.
    soluteChgFlag = .false.
+   dipoleMomentFlag = .false.
 
    ios = 0
 
@@ -283,6 +274,10 @@ subroutine read_cfg(cfgFile, histFile, outFile)
             soluteChg(2) = -soluteChg(1)
             write(*,*) "Solute Charges:      ", soluteChg
             soluteChgFlag= .true.
+         else if (firstWord .eq. "dipole_moment") then
+            read(line,*) dipole_moment
+            write(*,*) "Dipole Moment:      ", dipole_moment
+            dipoleMomentFlag= .true.
          end if
       end if
    end do
@@ -362,6 +357,10 @@ subroutine read_cfg(cfgFile, histFile, outFile)
    end if
    if (soluteChgFlag.eqv..false.) then
       write(*,*) "Config file must have a 'solute_charge' value"
+      stop
+   end if
+   if (dipoleMomentFlag.eqv..false.) then
+      write(*,*) "Config file must have a 'dipole_moment' value"
       stop
    end if
 
@@ -932,10 +931,9 @@ end subroutine R_list
 
 ! setup for the average force integral
 subroutine setup_compute_avg_force
-   use cfgData; use angleData; use ctrlData
+   use cfgData; use ctrlData
    implicit none
    integer :: i
-   real(kind=dp) :: psiLF
 
    write(*,*) "Setting up for average force iteration..."
 
@@ -977,37 +975,15 @@ subroutine setup_compute_avg_force
       z_axis(i) = (i-1) * xzStepSize + xzStepSize/2_dp
    end do
 
-   ! ANGLES
-   allocate( cosThetaLF(cfgCosThBins), sinThetaLF(cfgCosThBins), sinPsiLF(cfgPsiBins), cosPsiLF(cfgPsiBins) )
-
-   ! Theta
-   ! tilt off of z
-   cfgCosThStepSize = (cosTh_max - cosTh_min) / real(cfgCosThBins, dp)
-   do i = 1, cfgCosThBins
-      cosThetaLF(i) = (i-0.5_dp)*cfgCosThStepSize - cosTh_max
-      sinThetaLF(i) = sqrt(abs(1_dp-cosThetaLF(i)**2))
-   end do
-   write(*,*) "Config Cos(Theta) Step Size:      ", cfgCosThStepSize
-
-   ! Psi
-   ! processison about z
-   cfgPsiStepSize = (psi_max - psi_min) / real(cfgPsiBins, dp)
-   do i = 1, cfgPsiBins
-      psiLF = (i+0.5_dp)*cfgPsiStepSize
-      sinPsiLF(i) = sin(psiLF)
-      cosPsiLF(i) = cos(psiLF)
-   end do
-   write(*,*) "Config Psi Step Size:         ", cfgPsiStepSize
-
 end subroutine setup_compute_avg_force
 
 
 ! do the average force integral
 subroutine compute_avg_force
-   use cfgData; use histData; use angleData; use ctrlData; use constants; use functions
+   use cfgData; use histData; use ctrlData; use constants; use functions
    implicit none
-   integer :: r, i, j, ip, omp_get_thread_num !, omp_get_num_threads
-   real(kind=dp) :: gx1, gx2, flj, emfVec(3), emf, fx1, fx2, polMeanVec(3), emfVecMag
+   integer :: r, i, j, ip, omp_get_thread_num, omp_get_num_threads
+   real(kind=dp) :: rSolv1(3), rSolv2(3), rSolvn(2), gx1, gx2, flj, emfVec(3), emf, fx1, fx2, polMeanVec(3), emfVecMag
 
    write(*,*) "Computing average force..."; flush(6)
 
@@ -1018,13 +994,13 @@ subroutine compute_avg_force
 !   do r = cfgRBins, cfgRBins ! loop lj--lj distances !debug
       frcSPA = 0_dp; grSPA = 0_dp
       !$omp PARALLEL DEFAULT( none ) &
-      !$omp PRIVATE( ip, i, j, gx1, gx2, fx1, fx2, flj, emfVec, emf, polMeanVec, emfVecMag ) &
+      !$omp PRIVATE( ip, i, j, rSolv1, rSolv2, rSolvn, gx1, gx2, fx1, fx2, flj, emfVec, emf, polMeanVec, emfVecMag ) &
       !$omp SHARED( nThreads, r, xBins, zBins, cut, R_axis, x_axis, z_axis, histDist, histDistBins, g1D, g1D2, fLJr1D, fLJr1D2, &
       !$omp&   fCr1D, fCr1D2, emf1D, emf1D2, frcSPA, grSPA, soluteChg, dielectric, density, dipole_moment ) &
       !$omp NUM_THREADS( nThreads )
       if ((omp_get_thread_num().eq.0).and.(r.eq.1)) then
          write(*,*) 'Parallel CPUs:         ', nThreads
-         !write(*,*) 'Parallel CPUs:         ', omp_get_num_threads()
+!         write(*,*) 'Parallel CPUs:         ', omp_get_num_threads()
          flush(6)
       end if
       !$omp DO SCHEDULE( guided )
@@ -1062,7 +1038,7 @@ subroutine compute_avg_force
             if (rSolvn(1).gt.histDist(histDistBins)) then
                ! outside solute 1 interaction volume use ideal field in CDD
                !emfVec = (coulomb_const_kcalmolAq2/dielectric*soluteChg(1)/rSolvn(1)**2) * (-rSolv1/rSolvn(1))
-               emfVec = (3.0/4.0/pi/density/dipole_moment*soluteChg(1)*(1.-1./dielectric)/rSolvn(1)**2) * (-rSolv1/rSolvn(1))
+               emfVec = emfVec + (3.0/4.0/pi/density/dipole_moment*soluteChg(1)*(1.-1./dielectric)/rSolvn(1)**2) * (-rSolv1/rSolvn(1))
                fx1 = 0_dp ! LJ force is zero
             else
                call splint(histDist,fLJr1D(1,:),fLJr1D2(1,:),histDistBins,rSolvn(1), flj) ! lj force
@@ -1076,7 +1052,7 @@ subroutine compute_avg_force
             if (rSolvn(2).gt.histDist(histDistBins)) then ! solute 2
                ! outside solute 2 interaction volume use ideal field in CDD
                !emfVec = emfVec + (coulomb_const_kcalmolAq2/dielectric*soluteChg(2)/rSolvn(2)**2) * (-rSolv2/rSolvn(2))
-               emfVec = (3.0/4.0/pi/density/dipole_moment*soluteChg(2)*(1.-1./dielectric)/rSolvn(2)**2) * (-rSolv2/rSolvn(2))
+               emfVec = emfVec + (3.0/4.0/pi/density/dipole_moment*soluteChg(2)*(1.-1./dielectric)/rSolvn(2)**2) * (-rSolv2/rSolvn(2))
                fx2 = 0_dp ! LJ force is zero
             else
                call splint(histDist,fLJr1D(2,:),fLJr1D2(2,:),histDistBins,rSolvn(2), flj)
@@ -1127,12 +1103,10 @@ subroutine compute_avg_force
             frcSPA(2,2,i,j) = frcSPA(2,2,i,j)/grSPA(i,j) ! coulomb solute 2
          end do !z again
       end do !x again
-      call write_test_out(r) ! write grSPA and frcSPA arrays
+      !call write_test_out(r) ! write grSPA and frcSPA arrays !debug
        
-      ! NOTE : After the fact multiply all elements by 2*pi*density/8/pi/pi (2*2pi*pi/3 (4pi**2)/3 steradians from orientations)
-      !       Number density of chloroform per Angstrom**3 == 0.00750924
-      fAvg(1,r) = fAvg(1,r)*2*pi*density*xzStepSize*xzStepSize
-      fAvg(2,r) = fAvg(2,r)*2*pi*density*xzStepSize*xzStepSize !debug+ emfVecMag ! with long range correction added
+      fAvg(1,r) = fAvg(1,r)*2*pi*density*xzStepSize*xzStepSize ! lj
+      fAvg(2,r) = fAvg(2,r)*2*pi*density*xzStepSize*xzStepSize + emfVecMag ! Coulomb with long range correction added
       longRange(r) = emfVecMag !debug
    end do !r
 
@@ -1195,7 +1169,6 @@ subroutine write_test_out(r)
    frmt = '(I3.3)' ! an integer of width 3 with zeroes on the left
    write(temp,frmt) i_f ! converting integer to string using 'internal file'
    filename='hist1D_output.'//trim(temp)//'.dat'
-
 
    open(35,file=filename,status='replace')
    write(6,*) "Writing test file:   ", filename
